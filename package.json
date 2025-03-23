@@ -4,6 +4,11 @@
   "description": "A secure URL shortener using quantum-inspired encryption techniques",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "jest",
@@ -11,16 +16,25 @@
     "test:coverage": "jest --coverage",
     "clean": "rimraf dist coverage",
     "prepare": "npm run clean && npm run build",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "preversion": "npm run test",
+    "version": "git add -A src"
   },
   "keywords": [
     "url-shortener",
     "quantum",
     "encryption",
     "typescript",
-    "secure"
+    "secure",
+    "url",
+    "shortener",
+    "crypto"
   ],
-  "author": "",
+  "author": {
+    "name": "Ayush Jadaun",
+    "email": "ayushjadaun6@gmail.com",
+    "url": "https://github.com/ayush-jadaun"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -30,6 +44,9 @@
     "url": "https://github.com/ayush-jadaun/ShortyQ/issues"
   },
   "homepage": "https://github.com/ayush-jadaun/ShortyQ#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
   "dependencies": {
     "@types/node": "^20.11.24",
     "crypto-js": "^4.2.0",
