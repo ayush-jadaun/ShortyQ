@@ -1,0 +1,15 @@
+{
+  "name": "shortyq-examples",
+  "version": "1.0.0",
+  "description": "Examples for the ShortyQ URL shortener package",
+  "scripts": {
+    "demo": "ts-node demo.ts"
+  },
+  "dependencies": {
+    "shortyq": "file:.."
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

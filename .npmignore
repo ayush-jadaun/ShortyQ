@@ -1,14 +1,60 @@
 # Source files
 src/
-*.ts
-!*.d.ts
+tests/
+examples/
+benchmarks/
+docs/
 
-# Tests
-__tests__/
+# Configuration files
+tsconfig.json
+jest.config.js
+.eslintrc
+.prettierrc
+.editorconfig
+.travis.yml
+.github/
+
+# Test files
 *.test.ts
 *.spec.ts
+__tests__/
+__mocks__/
+
+# Development files
+.vscode/
+.idea/
+.git/
+.gitignore
+.npmignore
+*.tsbuildinfo
+
+# Documentation and examples
+docs/
+examples/
+benchmarks/
+*.md
+!README.md
+
+# Build artifacts
 coverage/
-jest.config.js
+.nyc_output/
+benchmark-results/
+
+# Environment files
+.env*
+*.env
+
+# Logs and temporary files
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+
+# Dependencies
+node_modules/
+yarn.lock
+package-lock.json
 
 # Development configs
 .git/
@@ -28,6 +74,7 @@ tsconfig.json
 *.swp
 *.swo
 .DS_Store
+Thumbs.db
 
 # Logs and debugging
 logs/
@@ -62,4 +109,8 @@ azure-pipelines.yml
 
 # Demo and example files
 demo/
-src/demo.ts 
+src/demo.ts
+
+# Cache directories
+.cache/
+.eslintcache 
