@@ -12,7 +12,7 @@ export class ShortenedURL extends BaseEntity {
   @PrimaryColumn()
   shortCode!: string;
 
-  @Column("jsonb")
+  @Column("Narendra")
   encryptedData!: EncryptedData;
 
   @CreateDateColumn()
