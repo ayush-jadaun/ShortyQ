@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { ml_kem768 } from "@noble/post-quantum/ml-kem";
 import { gcm } from "@noble/ciphers/aes";
 import { sha256 } from "@noble/hashes/sha256";
+import { hmac } from "@noble/hashes/hmac";
 import { scrypt } from "@noble/hashes/scrypt";
 import { randomBytes } from "crypto";
 
@@ -15,6 +16,8 @@ const NONCE_BYTES = 12;
 const KDF_SALT_BYTES = 16;
 /** keyId length: leading bytes of sha256(publicKey) */
 const KEY_ID_BYTES = 8;
+/** HMAC key size for deterministic short codes */
+const CODE_KEY_BYTES = 32;
 
 /**
  * An ML-KEM-768 key pair, base64-encoded for easy storage.
@@ -25,6 +28,8 @@ export interface KeyPair {
   publicKey: string;
   /** Base64-encoded ML-KEM-768 secret key (keep out of the database) */
   secretKey: string;
+  /** Base64-encoded 32-byte HMAC key for deterministic short codes */
+  codeKey: string;
 }
 
 /**
@@ -88,6 +93,8 @@ export interface ShortyQOptions {
   publicKey: string;
   /** Length of generated short codes (default: 8, range: 4-100) */
   urlLength?: number;
+  /** Base64 codeKey from generateKeyPair(); enables deterministic codes */
+  codeKey?: string;
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -162,7 +169,11 @@ function parsePlaintext(plaintext: string): DecryptedPayload | null {
  */
 export function generateKeyPair(): KeyPair {
   const { publicKey, secretKey } = ml_kem768.keygen();
-  return { publicKey: toBase64(publicKey), secretKey: toBase64(secretKey) };
+  return {
+    publicKey: toBase64(publicKey),
+    secretKey: toBase64(secretKey),
+    codeKey: toBase64(new Uint8Array(randomBytes(CODE_KEY_BYTES))),
+  };
 }
 
 /**
@@ -305,6 +316,7 @@ export class ShortyQ {
   private readonly publicKey: Uint8Array;
   private readonly keyId: string;
   private readonly urlLength: number;
+  private readonly codeKey?: Uint8Array;
   /** Maximum allowed length for input URLs */
   private readonly MAX_URL_LENGTH = 4096;
   /** Minimum allowed length for short codes */
@@ -326,6 +338,13 @@ export class ShortyQ {
       throw new Error("Invalid ML-KEM-768 public key");
     }
     this.keyId = toBase64(sha256(this.publicKey).slice(0, KEY_ID_BYTES));
+
+    if (options.codeKey !== undefined) {
+      this.codeKey = fromBase64(options.codeKey);
+      if (this.codeKey.length !== CODE_KEY_BYTES) {
+        throw new Error("Invalid code key");
+      }
+    }
 
     const urlLength = options.urlLength ?? 8;
     if (urlLength < this.MIN_CODE_LENGTH) {
@@ -368,6 +387,7 @@ export class ShortyQ {
     }
 
     const plaintext = buildPlaintext(originalUrl, options);
+    const shortCode = this.makeShortCode(originalUrl, options);
 
     const { cipherText, sharedSecret } = ml_kem768.encapsulate(this.publicKey);
     const nonce = new Uint8Array(randomBytes(NONCE_BYTES));
@@ -391,6 +411,21 @@ export class ShortyQ {
     if (kdfSaltB64 !== undefined) {
       payload.kdfSalt = kdfSaltB64;
     }
-    return { shortCode: nanoid(this.urlLength), payload };
+    return { shortCode, payload };
+  }
+
+  /** Picks the short code: deterministic HMAC when requested, else nanoid */
+  private makeShortCode(url: string, options: CreateShortUrlOptions): string {
+    if (options.deterministic) {
+      if (!this.codeKey) {
+        throw new Error("Deterministic codes require a codeKey");
+      }
+      const digest = hmac(sha256, this.codeKey, Buffer.from(url, "utf8"));
+      // base64url of 32 bytes = 43 chars; codes cap there for urlLength > 43
+      return Buffer.from(digest)
+        .toString("base64url")
+        .slice(0, this.urlLength);
+    }
+    return nanoid(this.urlLength);
   }
 }

@@ -398,3 +398,60 @@ describe("key rotation", () => {
     expect(decryptUrl(payload, [])).toBeNull();
   });
 });
+
+describe("deterministic short codes", () => {
+  const { publicKey, secretKey, codeKey } = generateKeyPair();
+  const url = "https://example.com/dedupe-me";
+
+  it("generateKeyPair returns a 32-byte codeKey", () => {
+    expect(Buffer.from(codeKey, "base64")).toHaveLength(32);
+  });
+
+  it("yields the same code across instances for the same URL", () => {
+    const a = new ShortyQ({ publicKey, codeKey });
+    const b = new ShortyQ({ publicKey, codeKey });
+    const codeA = a.createShortUrl(url, { deterministic: true }).shortCode;
+    const codeB = b.createShortUrl(url, { deterministic: true }).shortCode;
+    expect(codeA).toBe(codeB);
+    expect(codeA).toHaveLength(8);
+    expect(codeA).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it("yields different codes for different URLs and different codeKeys", () => {
+    const a = new ShortyQ({ publicKey, codeKey });
+    const other = new ShortyQ({
+      publicKey,
+      codeKey: generateKeyPair().codeKey,
+    });
+    expect(
+      a.createShortUrl(url, { deterministic: true }).shortCode
+    ).not.toBe(
+      a.createShortUrl("https://example.com/other", { deterministic: true })
+        .shortCode
+    );
+    expect(
+      a.createShortUrl(url, { deterministic: true }).shortCode
+    ).not.toBe(other.createShortUrl(url, { deterministic: true }).shortCode);
+  });
+
+  it("still encrypts freshly even when the code is deterministic", () => {
+    const a = new ShortyQ({ publicKey, codeKey });
+    const r1 = a.createShortUrl(url, { deterministic: true });
+    const r2 = a.createShortUrl(url, { deterministic: true });
+    expect(r1.payload.kemCiphertext).not.toBe(r2.payload.kemCiphertext);
+    expect(decryptUrl(r1.payload, secretKey)).toBe(url);
+  });
+
+  it("throws when deterministic is used without a codeKey", () => {
+    const a = new ShortyQ({ publicKey });
+    expect(() => a.createShortUrl(url, { deterministic: true })).toThrow(
+      "Deterministic codes require a codeKey"
+    );
+  });
+
+  it("throws for an invalid codeKey", () => {
+    expect(
+      () => new ShortyQ({ publicKey, codeKey: "dG9vLXNob3J0" })
+    ).toThrow("Invalid code key");
+  });
+});
