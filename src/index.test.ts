@@ -173,3 +173,60 @@ describe("decryptUrl failure modes", () => {
     expect(decryptUrl(payload, "dG9vLXNob3J0")).toBeNull();
   });
 });
+
+describe("validation", () => {
+  const { publicKey } = generateKeyPair();
+  const shortyQ = new ShortyQ({ publicKey });
+
+  it("throws for an empty URL", () => {
+    expect(() => shortyQ.createShortUrl("")).toThrow("URL cannot be empty");
+  });
+
+  it("throws for undefined and null URLs", () => {
+    expect(() => shortyQ.createShortUrl(undefined as any)).toThrow(
+      "URL cannot be empty"
+    );
+    expect(() => shortyQ.createShortUrl(null as any)).toThrow(
+      "URL cannot be empty"
+    );
+  });
+
+  it("throws for an invalid URL format", () => {
+    expect(() => shortyQ.createShortUrl("not-a-valid-url")).toThrow(
+      "Invalid URL format"
+    );
+  });
+
+  it("throws for URLs exceeding 4096 characters", () => {
+    const url = `https://example.com/${"a".repeat(8192)}`;
+    expect(() => shortyQ.createShortUrl(url)).toThrow(
+      "URL length cannot exceed 4096 characters"
+    );
+  });
+
+  it("throws when constructed without a public key", () => {
+    expect(() => new ShortyQ({} as any)).toThrow("Public key is required");
+    expect(() => new ShortyQ(undefined as any)).toThrow(
+      "Public key is required"
+    );
+  });
+
+  it("throws for a public key of the wrong size", () => {
+    const tooShort = Buffer.from("short").toString("base64");
+    expect(() => new ShortyQ({ publicKey: tooShort })).toThrow(
+      "Invalid ML-KEM-768 public key"
+    );
+  });
+
+  it("throws for urlLength below 4", () => {
+    expect(() => new ShortyQ({ publicKey, urlLength: 3 })).toThrow(
+      "URL length must be at least 4 characters"
+    );
+  });
+
+  it("throws for urlLength above 100", () => {
+    expect(() => new ShortyQ({ publicKey, urlLength: 101 })).toThrow(
+      "URL length cannot exceed 100 characters"
+    );
+  });
+});
