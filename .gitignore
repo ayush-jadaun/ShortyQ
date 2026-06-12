@@ -46,8 +46,9 @@ benchmark-results/
 .npm/
 .eslintcache
 
-# Example and documentation files
-docs/
+# Example and documentation files (design specs stay tracked)
+docs/*
+!docs/superpowers/
 
 # Demo files
 demo/
