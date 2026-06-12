@@ -1,6 +1,6 @@
 {
   "name": "shortyq",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "A quantum-safe URL shortener using NIST-standardized post-quantum cryptography (ML-KEM-768)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

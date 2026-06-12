@@ -25,6 +25,11 @@ and a leaked database reveals nothing without your secret key.
 - 🔐 Real post-quantum encryption (ML-KEM-768, NIST FIPS 203)
 - 🔑 Public-key model: shorten anywhere, decrypt only with the secret key
 - ✅ Authenticated encryption (AES-256-GCM) — tampered data fails closed
+- ⏳ Encrypted expiry & metadata — enforced inside the ciphertext
+- 🔏 Password-protected links (scrypt-hardened)
+- 🔁 Key rotation with keyId stamping
+- 🎯 Deterministic and vanity short codes
+- 🧰 `npx shortyq keygen` CLI
 - ⚙️ Configurable short code length (4-100 chars)
 - 💾 Bring your own storage (PostgreSQL, MongoDB, Redis, ...)
 - 📝 TypeScript-first with full type definitions
@@ -70,14 +75,15 @@ const originalUrl = decryptUrl(stored.payload, secretKey);
 ### `generateKeyPair(): KeyPair`
 
 Generates an ML-KEM-768 key pair as base64 strings:
-`{ publicKey, secretKey }`. Call once; reuse the keys.
+`{ publicKey, secretKey, codeKey }`. Call once; reuse the keys.
 
 ### `new ShortyQ(options)`
 
-| Option      | Type   | Required | Default | Description                                |
-| ----------- | ------ | -------- | ------- | ------------------------------------------ |
-| `publicKey` | string | yes      | —       | Base64 public key from `generateKeyPair()` |
-| `urlLength` | number | no       | 8       | Short code length (4-100)                  |
+| Option      | Type   | Required | Default | Description                                  |
+| ----------- | ------ | -------- | ------- | -------------------------------------------- |
+| `publicKey` | string | yes      | —       | Base64 public key from `generateKeyPair()`   |
+| `urlLength` | number | no       | 8       | Short code length (4-100)                    |
+| `codeKey`   | string | no       | —       | Base64 codeKey enabling deterministic codes  |
 
 ### `shortyQ.createShortUrl(url): { shortCode, payload }`
 
@@ -88,11 +94,84 @@ ML-KEM encapsulation. The returned `payload` is
 
 Throws on empty, invalid, or over-long URLs.
 
-### `decryptUrl(payload, secretKey): string | null`
+### `decryptUrl(payload, secretKey | secretKey[], options?): string | null`
 
 Decapsulates and decrypts. Returns the original URL, or `null` if the secret
-key is wrong, the payload is malformed, or the data was tampered with. Never
-throws.
+key is wrong, the password is wrong/missing, the link has expired, the
+payload is malformed, or the data was tampered with. Never throws.
+
+### `decryptPayload(payload, secretKey | secretKey[], options?): { url, metadata?, expiresAt? } | null`
+
+Like `decryptUrl`, but returns the full decrypted contents. Pass an array of
+secret keys to support key rotation — each is tried until one authenticates.
+
+### `getKeyId(publicKey): string`
+
+Advisory 8-byte identifier (base64) for a public key. Every payload carries
+the `keyId` of the key that encrypted it, so apps can index their keys.
+
+### `shortyQ.createShortUrls(items): Array<{ shortCode, payload }>`
+
+Batch variant. Items are URLs or `{ url, options }` objects. Throws on the
+first invalid item (no partial results).
+
+## v2.1 features
+
+### Encrypted expiry & metadata
+
+```typescript
+const { payload } = shortyQ.createShortUrl("https://example.com/sale", {
+  expiresAt: new Date("2026-12-31"),       // Date or epoch millis
+  metadata: { campaign: "winter", owner: "ayush" },
+});
+
+const result = decryptPayload(payload, secretKey);
+// { url, metadata, expiresAt } — or null once expired
+```
+
+Expiry and metadata live **inside the authenticated ciphertext**: whoever
+holds the database can neither read nor extend them.
+
+### Password-protected links
+
+```typescript
+const { payload } = shortyQ.createShortUrl(url, { password: "hunter2" });
+decryptUrl(payload, secretKey);                          // null
+decryptUrl(payload, secretKey, { password: "hunter2" }); // url
+```
+
+The password is stretched with scrypt (N=2^15) and mixed into the AES key:
+decryption requires the secret key **and** the password — even the operator
+holding the secret key cannot read these links without it.
+
+### Key rotation
+
+```typescript
+const NEW = generateKeyPair();
+// new links use NEW.publicKey; old links still decrypt:
+decryptUrl(payload, [NEW.secretKey, OLD.secretKey]);
+```
+
+### Deterministic & vanity short codes
+
+```typescript
+const shortyQ = new ShortyQ({ publicKey, codeKey }); // codeKey from generateKeyPair()
+
+// Same URL -> same code (dedupe). Opt-in: reveals URL-equality in your DB.
+shortyQ.createShortUrl(url, { deterministic: true });
+
+// Vanity code (4-100 chars of A-Za-z0-9_-); collision checks are your job
+shortyQ.createShortUrl(url, { shortCode: "summer-sale" });
+```
+
+Deterministic codes are capped at 43 characters (the full HMAC digest).
+
+### CLI
+
+```bash
+npx shortyq keygen          # prints SHORTYQ_PUBLIC_KEY / SECRET_KEY / CODE_KEY
+npx shortyq keygen --json   # same as JSON
+```
 
 ## Key handling
 

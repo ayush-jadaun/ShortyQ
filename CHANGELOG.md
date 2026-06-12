@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-06-12
+
+### Added
+
+- Encrypted envelope: `expiresAt` and `metadata` options on `createShortUrl`,
+  enforced/returned by the new `decryptPayload()`. Expired links decrypt to
+  `null`. Fully backward compatible: v2.0 payloads still decrypt.
+- Password-protected links: `{ password }` option mixes an scrypt-stretched
+  key into the AES key; payloads gain an optional `kdfSalt` field.
+- Key rotation: payloads are stamped with `keyId` (8 bytes of
+  sha256(publicKey), via new `getKeyId()`); `decryptUrl`/`decryptPayload`
+  accept an array of secret keys.
+- Deterministic short codes: `generateKeyPair()` now also returns a
+  `codeKey`; `{ deterministic: true }` derives the code as
+  HMAC-SHA256(codeKey, url) (opt-in, reveals URL-equality).
+- Vanity short codes: `{ shortCode: "summer-sale" }`.
+- Batch API: `createShortUrls(items)`.
+- CLI: `npx shortyq keygen [--json]`.
+
+### Notes
+
+- Records written by v2.1 decrypt under the v2.0 library as the raw JSON
+  envelope, not the bare URL. Upgrade readers first.
+
+[2.1.0]: https://github.com/ayush-jadaun/ShortyQ/releases/tag/v2.1.0
+
 ## [2.0.0] - 2026-06-12
 
 ### Changed — BREAKING
