@@ -1,13 +1,16 @@
-import { ShortyQ } from "../src/index";
+import { ShortyQ, generateKeyPair, decryptUrl } from "../src/index";
 import { performance } from "perf_hooks";
 
 class Benchmark {
   private shortyQ: ShortyQ;
+  private secretKey: string;
   private iterations: number;
   private results: { [key: string]: number[] } = {};
 
   constructor(iterations = 1000) {
-    this.shortyQ = new ShortyQ();
+    const { publicKey, secretKey } = generateKeyPair();
+    this.shortyQ = new ShortyQ({ publicKey });
+    this.secretKey = secretKey;
     this.iterations = iterations;
   }
 
@@ -54,10 +57,10 @@ class Benchmark {
 
   async runDecryptionBenchmark() {
     const url = "https://example.com/test";
-    const { encryptedData } = this.shortyQ.createShortUrl(url);
+    const { payload } = this.shortyQ.createShortUrl(url);
     await this.measure("URL Decryption", async () => {
       for (let i = 0; i < this.iterations; i++) {
-        this.shortyQ.decryptUrl(encryptedData);
+        decryptUrl(payload, this.secretKey);
       }
     });
   }

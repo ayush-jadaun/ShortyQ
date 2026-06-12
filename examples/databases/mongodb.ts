@@ -1,19 +1,20 @@
 import mongoose, { Schema, Document } from "mongoose";
-import { ShortyQ, EncryptedData } from "../../src/index";
+import { ShortyQ, decryptUrl, EncryptedPayload } from "../../src/index";
 
 interface IShortenedURL extends Document {
   shortCode: string;
-  encryptedData: EncryptedData;
+  payload: EncryptedPayload;
   createdAt: Date;
   expiresAt?: Date;
 }
 
 const ShortenedURLSchema = new Schema({
   shortCode: { type: String, required: true, unique: true, index: true },
-  encryptedData: {
-    data: { type: String, required: true },
-    noise: { type: String, required: true },
-    iv: { type: String, required: true },
+  // Safe to store: useless without the secret key
+  payload: {
+    kemCiphertext: { type: String, required: true },
+    nonce: { type: String, required: true },
+    ciphertext: { type: String, required: true },
   },
   createdAt: { type: Date, default: Date.now },
   expiresAt: { type: Date },
@@ -29,17 +30,24 @@ const ShortenedURL = mongoose.model<IShortenedURL>(
 
 export class MongoURLService {
   private shortyQ: ShortyQ;
+  private secretKey: string;
 
-  constructor(options = {}) {
-    this.shortyQ = new ShortyQ(options);
+  /**
+   * @param publicKey base64 ML-KEM-768 public key (from generateKeyPair)
+   * @param secretKey base64 secret key — load from an env var or KMS,
+   *                  e.g. process.env.SHORTYQ_SECRET_KEY
+   */
+  constructor(publicKey: string, secretKey: string, urlLength?: number) {
+    this.shortyQ = new ShortyQ({ publicKey, urlLength });
+    this.secretKey = secretKey;
   }
 
   async shortenUrl(url: string, expiresIn?: number): Promise<string> {
-    const { shortCode, encryptedData } = this.shortyQ.createShortUrl(url);
+    const { shortCode, payload } = this.shortyQ.createShortUrl(url);
 
     await ShortenedURL.create({
       shortCode,
-      encryptedData,
+      payload,
       expiresAt: expiresIn ? new Date(Date.now() + expiresIn) : undefined,
     });
 
@@ -56,7 +64,7 @@ export class MongoURLService {
     });
 
     if (!record) return null;
-    return this.shortyQ.decryptUrl(record.encryptedData);
+    return decryptUrl(record.payload, this.secretKey);
   }
 
   async deleteUrl(shortCode: string): Promise<void> {

@@ -25,8 +25,7 @@ The demo showcases various features of ShortyQ:
 
 2. **Advanced Configuration**
    - Custom URL length
-   - Custom salt rounds
-   - Fixed quantum seed
+   - Key pair generation and handling
 
 3. **Error Handling**
    - Empty URL validation
@@ -40,24 +39,21 @@ The demo showcases various features of ShortyQ:
    - URLs with Unicode characters
    - URLs with fragments
 
-5. **Performance**
-   - Encryption speed
-   - Decryption speed
-   - Average operation times
-
 ## Database Integration Examples
 
 ### PostgreSQL with TypeORM
 
 ```typescript
+import { generateKeyPair } from "shortyq";
 import { PostgresURLService } from "shortyq/examples/databases/postgres";
 
-const postgresService = new PostgresURLService({
-  // Optional configuration
-  urlLength: 8,
-  saltRounds: 12,
-  quantumSeed: 42,
-});
+// One-time: generate keys, store secretKey in an env var or KMS
+const { publicKey, secretKey } = generateKeyPair();
+
+const postgresService = new PostgresURLService(
+  publicKey,
+  process.env.SHORTYQ_SECRET_KEY!
+);
 
 // Create short URL with 24-hour expiration
 const shortCode = await postgresService.shortenUrl(
@@ -71,14 +67,11 @@ const shortCode = await postgresService.shortenUrl(
 ```typescript
 import { MongoURLService } from "shortyq/examples/databases/mongodb";
 
-const mongoService = new MongoURLService({
-  // Optional configuration
-  urlLength: 8,
-  saltRounds: 12,
-  quantumSeed: 42,
-});
+const mongoService = new MongoURLService(
+  publicKey,
+  process.env.SHORTYQ_SECRET_KEY!
+);
 
-// Create short URL with default expiration
 await mongoService.shortenUrl("https://example.com");
 ```
 
@@ -87,15 +80,11 @@ await mongoService.shortenUrl("https://example.com");
 ```typescript
 import { RedisURLService } from "shortyq/examples/databases/redis";
 
-const redisService = new RedisURLService({
-  // Redis configuration
-  host: "localhost",
-  port: 6379,
-  // Optional ShortyQ configuration
-  urlLength: 8,
-  saltRounds: 12,
-  quantumSeed: 42,
-});
+const redisService = new RedisURLService(
+  publicKey,
+  process.env.SHORTYQ_SECRET_KEY!,
+  { host: "localhost", port: 6379 }
+);
 
 // Create short URL with 1-hour expiration
 await redisService.shortenUrl("https://example.com", 3600);

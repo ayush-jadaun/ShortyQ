@@ -1,85 +1,89 @@
-import { ShortyQ } from "shortyq";
+import { ShortyQ, generateKeyPair, decryptUrl } from "shortyq";
+
+// One-time setup: generate a key pair. In a real app, do this once and
+// store the secret key in an env var or KMS — never in the database.
+const { publicKey, secretKey } = generateKeyPair();
 
 // Example 1: Basic Usage
-async function basicDemo() {
+function basicDemo() {
   console.log("\n🚀 Basic Usage Demo");
   console.log("==================");
 
-  // Initialize with default options
-  const shortyQ = new ShortyQ();
+  const shortyQ = new ShortyQ({ publicKey });
 
-  // Create a short URL
   const url = "https://example.com/very/long/path/that/needs/shortening";
-  const { shortCode, encryptedData } = shortyQ.createShortUrl(url);
+  const { shortCode, payload } = shortyQ.createShortUrl(url);
 
   console.log("Original URL:", url);
   console.log("Short Code:", shortCode);
-  console.log("Encrypted Data:", encryptedData);
+  console.log("Payload (safe to store):", payload);
 
-  // Decrypt the URL
-  const decryptedUrl = shortyQ.decryptUrl(encryptedData);
+  // Decryption requires the secret key
+  const decryptedUrl = decryptUrl(payload, secretKey);
   console.log("Decrypted URL:", decryptedUrl);
   console.log("URLs match:", url === decryptedUrl);
 }
 
-// Example 2: Advanced Configuration
-async function advancedConfigDemo() {
-  console.log("\n⚙️ Advanced Configuration Demo");
-  console.log("=============================");
+// Example 2: Custom Configuration
+function configDemo() {
+  console.log("\n⚙️ Configuration Demo");
+  console.log("=====================");
 
-  // Initialize with custom options
   const shortyQ = new ShortyQ({
-    urlLength: 10, // Longer short codes
-    saltRounds: 15, // More secure but slower
-    quantumSeed: 42, // Fixed seed for reproducibility
+    publicKey,
+    urlLength: 10, // Longer short codes (4-100, default 8)
   });
 
   const url = "https://api.example.com/v1/users?sort=desc&limit=100";
-  const { shortCode, encryptedData } = shortyQ.createShortUrl(url);
+  const { shortCode, payload } = shortyQ.createShortUrl(url);
 
   console.log("Original URL:", url);
   console.log("Short Code (10 chars):", shortCode);
-  console.log("Encrypted Data:", encryptedData);
+  console.log(
+    "KEM ciphertext bytes:",
+    Buffer.from(payload.kemCiphertext, "base64").length
+  );
 }
 
 // Example 3: Error Handling
-async function errorHandlingDemo() {
+function errorHandlingDemo() {
   console.log("\n🚨 Error Handling Demo");
   console.log("=====================");
 
-  const shortyQ = new ShortyQ();
+  const shortyQ = new ShortyQ({ publicKey });
 
-  // Test empty URL
   try {
     shortyQ.createShortUrl("");
   } catch (error: any) {
     console.log("Empty URL Error:", error.message);
   }
 
-  // Test invalid URL
   try {
     shortyQ.createShortUrl("not-a-valid-url");
   } catch (error: any) {
     console.log("Invalid URL Error:", error.message);
   }
 
-  // Test URL exceeding maximum length
   const longUrl = "https://example.com/" + "a".repeat(5000);
   try {
     shortyQ.createShortUrl(longUrl);
   } catch (error: any) {
     console.log("Long URL Error:", error.message);
   }
+
+  // Wrong key: decryption fails closed with null, never throws
+  const { payload } = shortyQ.createShortUrl("https://example.com");
+  const wrongKey = generateKeyPair().secretKey;
+  console.log("Wrong key result:", decryptUrl(payload, wrongKey));
 }
 
 // Example 4: Different URL Types
-async function urlTypesDemo() {
+function urlTypesDemo() {
   console.log("\n🌐 Different URL Types Demo");
   console.log("==========================");
 
-  const shortyQ = new ShortyQ();
+  const shortyQ = new ShortyQ({ publicKey });
 
-  // Test URLs with different characteristics
   const urls = [
     "https://example.com", // Basic URL
     "https://api.example.com/search?q=test&sort=desc", // Query parameters
@@ -89,8 +93,8 @@ async function urlTypesDemo() {
   ];
 
   urls.forEach((url, index) => {
-    const { shortCode, encryptedData } = shortyQ.createShortUrl(url);
-    const decryptedUrl = shortyQ.decryptUrl(encryptedData);
+    const { shortCode, payload } = shortyQ.createShortUrl(url);
+    const decryptedUrl = decryptUrl(payload, secretKey);
 
     console.log(`\nURL ${index + 1}:`);
     console.log("Original:", url);
@@ -100,46 +104,10 @@ async function urlTypesDemo() {
   });
 }
 
-// Example 5: Performance Demo
-async function performanceDemo() {
-  console.log("\n⚡ Performance Demo");
-  console.log("==================");
-
-  const shortyQ = new ShortyQ();
-  const iterations = 100;
-  const url = "https://example.com/test";
-
-  // Measure encryption time
-  const encryptStart = performance.now();
-  for (let i = 0; i < iterations; i++) {
-    shortyQ.createShortUrl(url);
-  }
-  const encryptTime = (performance.now() - encryptStart) / iterations;
-
-  // Measure decryption time
-  const { encryptedData } = shortyQ.createShortUrl(url);
-  const decryptStart = performance.now();
-  for (let i = 0; i < iterations; i++) {
-    shortyQ.decryptUrl(encryptedData);
-  }
-  const decryptTime = (performance.now() - decryptStart) / iterations;
-
-  console.log(`Average encryption time: ${encryptTime.toFixed(2)}ms`);
-  console.log(`Average decryption time: ${decryptTime.toFixed(2)}ms`);
-}
-
 // Run all demos
-async function runAllDemos() {
-  console.log("🎬 Starting ShortyQ Demos\n");
-
-  await basicDemo();
-  await advancedConfigDemo();
-  await errorHandlingDemo();
-  await urlTypesDemo();
-  await performanceDemo();
-
-  console.log("\n✨ All demos completed!");
-}
-
-// Run the demos
-runAllDemos().catch(console.error);
+console.log("🎬 Starting ShortyQ Demos\n");
+basicDemo();
+configDemo();
+errorHandlingDemo();
+urlTypesDemo();
+console.log("\n✨ All demos completed!");
