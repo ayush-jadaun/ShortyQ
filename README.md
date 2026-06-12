@@ -10,6 +10,9 @@ and a leaked database reveals nothing without your secret key.
 - URLs are encrypted using a [KEM+DEM construction](https://en.wikipedia.org/wiki/Hybrid_cryptosystem):
   each URL gets a fresh shared secret encapsulated with ML-KEM-768, then is
   encrypted with AES-256-GCM.
+- Since v2.2, new keys are **hybrid X25519 + ML-KEM-768** — the same
+  defense-in-depth posture as OpenSSH 10's default key exchange: your data
+  stays confidential if *either* algorithm survives.
 - ML-KEM is the post-quantum key-encapsulation standard published by NIST
   (FIPS 203) and deployed by Signal, Chrome, and iMessage.
 - Decryption requires a secret key that you keep **outside the database**
@@ -74,8 +77,9 @@ const originalUrl = decryptUrl(stored.payload, secretKey);
 
 ### `generateKeyPair(): KeyPair`
 
-Generates an ML-KEM-768 key pair as base64 strings:
+Generates a hybrid X25519 + ML-KEM-768 key pair as base64 strings:
 `{ publicKey, secretKey, codeKey }`. Call once; reuse the keys.
+Legacy pure-ML-KEM keys (v2.0/v2.1) remain accepted everywhere.
 
 ### `new ShortyQ(options)`
 
@@ -173,6 +177,34 @@ npx shortyq keygen          # prints SHORTYQ_PUBLIC_KEY / SECRET_KEY / CODE_KEY
 npx shortyq keygen --json   # same as JSON
 ```
 
+## Hybrid key exchange (v2.2)
+
+New keys combine classical X25519 with post-quantum ML-KEM-768, mirroring
+what OpenSSH 10 (`mlkem768x25519`), Chrome, and Signal deploy: if a flaw is
+ever found in ML-KEM, X25519 still protects you — and vice versa for a
+quantum attacker.
+
+| Key | Pure (legacy, v2.0/v2.1) | Hybrid (v2.2 default) |
+| --- | --- | --- |
+| publicKey | 1184 bytes | 1216 bytes (ML-KEM ‖ X25519) |
+| secretKey | 2400 bytes | 2432 bytes (ML-KEM ‖ X25519) |
+
+Hybrid payloads carry one extra field, `x25519Ciphertext` (the ephemeral
+X25519 public key). The AES key is derived from both shared secrets:
+
+```
+baseKey = sha256("shortyq-hybrid-v1" ‖ ssMLKEM ‖ ssX25519 ‖ ctX ‖ pkX)
+```
+
+This is the standard concatenate-and-hash combiner used by TLS/SSH hybrid
+deployments (documented here precisely; it is not X-Wing). Password
+protection composes on top unchanged.
+
+**Compatibility:** everything is length-tagged, so legacy keys keep working
+— old payloads decrypt with old or new keys (a hybrid key contains its
+ML-KEM half), and rotation arrays can mix both. Only one rule: a hybrid
+payload needs a hybrid secret key.
+
 ## Key handling
 
 ```typescript
@@ -195,30 +227,34 @@ can decrypt everything — guard it accordingly.
 ## Performance
 
 Measured with `npm run bench` (`benchmarks/compare.ts`) on Node v22.13.1,
-x64, against the old shortyq v1 (from npm) and popular alternatives:
+x64, against the old shortyq v1 (from npm) and popular alternatives.
+Numbers vary a few × with machine load — run it yourself for your hardware.
 
-| Operation                               | avg (ms) | p95 (ms) | ops/sec |
-| --------------------------------------- | -------- | -------- | ------- |
-| **shortyq v2.1: createShortUrl**        | 0.51     | 0.72     | ~1,980  |
-| **shortyq v2.1: decryptUrl**            | 0.44     | 0.61     | ~2,260  |
-| **shortyq v2.1: generateKeyPair**       | 0.40     | 0.60     | ~2,490  |
-| shortyq v2.1: create with password      | 139      | 211      | ~7      |
-| shortyq v2.1: decrypt with password     | 123      | 251      | ~8      |
-| shortyq v1.0.1 (old): createShortUrl    | 0.77     | 2.61     | ~1,300  |
-| shortyq v1.0.1 (old): decryptUrl        | 1.46     | 3.34     | ~680    |
-| node crypto AES-256-GCM: encrypt        | 0.006    | 0.007    | ~180,000 |
-| tweetnacl box (X25519): encrypt         | 0.51     | 0.71     | ~1,940  |
-| tweetnacl box (X25519): decrypt         | 0.53     | 1.53     | ~1,890  |
+| Operation                                  | avg (ms) | ops/sec |
+| ------------------------------------------ | -------- | ------- |
+| **shortyq v2.2 pure ML-KEM: createShortUrl** | 0.9    | ~1,080  |
+| **shortyq v2.2 pure ML-KEM: decryptUrl**   | 1.6      | ~630    |
+| shortyq v2.2 hybrid: createShortUrl        | 7.8      | ~130    |
+| shortyq v2.2 hybrid: decryptUrl            | 6.5      | ~155    |
+| shortyq v2.2 hybrid: generateKeyPair       | 4.4      | ~230    |
+| shortyq v2.2 hybrid: create with password  | ~250     | ~4      |
+| shortyq v1.0.1 (old): createShortUrl       | 1.7      | ~610    |
+| shortyq v1.0.1 (old): decryptUrl           | 1.2      | ~830    |
+| node crypto AES-256-GCM: encrypt           | 0.01     | >100,000 |
+| tweetnacl box (X25519): encrypt            | 1.1      | ~960    |
+| tweetnacl box (X25519): decrypt            | 0.8      | ~1,270  |
 
 Takeaways:
 
-- **Post-quantum at classical speed:** ML-KEM-768 + AES-256-GCM shortens and
-  decrypts at the same speed as tweetnacl's classical X25519 box — while
-  being quantum-safe.
-- **Faster than v1:** ~1.5x faster shortening and ~3x faster decryption than
-  the old crypto-js implementation, with real security instead of theater.
-- **Password links are slow on purpose:** ~130ms per operation is the scrypt
-  work factor (N=2^15) doing its job against brute force.
+- **Pure ML-KEM mode is as fast as classical crypto:** on par with
+  tweetnacl's X25519 box and faster than the old v1 — while being
+  post-quantum.
+- **Hybrid mode trades ~6ms/op for defense-in-depth:** the two extra X25519
+  scalar multiplications (pure JS) dominate. ~130-155 ops/sec per core is
+  still far beyond typical URL-shortener write rates; use legacy-size pure
+  keys if you need maximum throughput.
+- **Password links are slow on purpose:** ~200ms+ per operation is the
+  scrypt work factor (N=2^15) doing its job against brute force.
 - Raw AES is microseconds; the public-key step dominates — that's the price
   of "shorten anywhere, decrypt only with the secret key" regardless of
   which public-key crypto you pick.

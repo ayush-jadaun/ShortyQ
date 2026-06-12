@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-06-12
+
+### Added
+
+- Hybrid X25519 + ML-KEM-768 key exchange — the same defense-in-depth
+  posture as OpenSSH 10's default (`mlkem768x25519`): confidentiality holds
+  if EITHER algorithm survives. `generateKeyPair()` now returns hybrid keys
+  (publicKey 1216 bytes = ML-KEM ‖ X25519, secretKey 2432 bytes); hybrid
+  payloads carry an `x25519Ciphertext` field (ephemeral X25519 public key).
+- Base AES key for hybrid payloads:
+  `sha256("shortyq-hybrid-v1" ‖ ssMLKEM ‖ ssX25519 ‖ ctX ‖ pkX)` — a
+  documented concatenate-and-hash combiner in the style of TLS/SSH hybrids
+  (not X-Wing-compliant). Passwords compose on top unchanged.
+
+### Compatibility
+
+- All v2.0/v2.1 (pure ML-KEM) keys and payloads keep working everywhere:
+  legacy keys are accepted by the constructor, `getKeyId`, and decryption;
+  hybrid secret keys also decrypt pure payloads addressed to their ML-KEM
+  half. Decrypting a hybrid payload requires a hybrid secret key.
+
+[2.2.0]: https://github.com/ayush-jadaun/ShortyQ/releases/tag/v2.2.0
+
 ## [2.1.0] - 2026-06-12
 
 ### Added

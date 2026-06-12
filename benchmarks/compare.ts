@@ -57,35 +57,56 @@ function row(s: Stats): string {
 
 const results: Stats[] = [];
 
-// --- ShortyQ v2.1 (this package): ML-KEM-768 + AES-256-GCM -----------------
+// --- ShortyQ v2.2 (this package) --------------------------------------------
+// Hybrid mode (default keys): X25519 + ML-KEM-768 + AES-256-GCM.
+// Pure mode (legacy v2.0/v2.1 keys): ML-KEM-768 + AES-256-GCM.
 {
-  const { publicKey, secretKey } = generateKeyPair();
-  const shortyQ = new ShortyQ({ publicKey });
-  const { payload } = shortyQ.createShortUrl(URL_UNDER_TEST);
-  const { payload: pwPayload } = shortyQ.createShortUrl(URL_UNDER_TEST, {
+  const { publicKey, secretKey } = generateKeyPair(); // hybrid
+  const legacyPk = Buffer.from(publicKey, "base64")
+    .subarray(0, 1184)
+    .toString("base64");
+  const legacySk = Buffer.from(secretKey, "base64")
+    .subarray(0, 2400)
+    .toString("base64");
+
+  const hybrid = new ShortyQ({ publicKey });
+  const pure = new ShortyQ({ publicKey: legacyPk });
+  const { payload: hybridPayload } = hybrid.createShortUrl(URL_UNDER_TEST);
+  const { payload: purePayload } = pure.createShortUrl(URL_UNDER_TEST);
+  const { payload: pwPayload } = hybrid.createShortUrl(URL_UNDER_TEST, {
     password: "hunter2",
   });
 
   results.push(
-    bench("shortyq v2.1: generateKeyPair", 500, () => generateKeyPair())
+    bench("shortyq v2.2 hybrid: generateKeyPair", 500, () => generateKeyPair())
   );
   results.push(
-    bench("shortyq v2.1: createShortUrl", 1000, () =>
-      shortyQ.createShortUrl(URL_UNDER_TEST)
+    bench("shortyq v2.2 hybrid: createShortUrl", 500, () =>
+      hybrid.createShortUrl(URL_UNDER_TEST)
     )
   );
   results.push(
-    bench("shortyq v2.1: decryptUrl", 1000, () =>
-      decryptUrl(payload, secretKey)
+    bench("shortyq v2.2 hybrid: decryptUrl", 500, () =>
+      decryptUrl(hybridPayload, secretKey)
     )
   );
   results.push(
-    bench("shortyq v2.1: createShortUrl + password", 20, () =>
-      shortyQ.createShortUrl(URL_UNDER_TEST, { password: "hunter2" })
+    bench("shortyq v2.2 pure ML-KEM: createShortUrl", 1000, () =>
+      pure.createShortUrl(URL_UNDER_TEST)
     )
   );
   results.push(
-    bench("shortyq v2.1: decryptUrl + password", 20, () =>
+    bench("shortyq v2.2 pure ML-KEM: decryptUrl", 1000, () =>
+      decryptUrl(purePayload, legacySk)
+    )
+  );
+  results.push(
+    bench("shortyq v2.2 hybrid: create + password", 20, () =>
+      hybrid.createShortUrl(URL_UNDER_TEST, { password: "hunter2" })
+    )
+  );
+  results.push(
+    bench("shortyq v2.2 hybrid: decrypt + password", 20, () =>
       decryptUrl(pwPayload, secretKey, { password: "hunter2" })
     )
   );
