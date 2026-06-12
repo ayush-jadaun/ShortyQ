@@ -1,6 +1,8 @@
 import { nanoid } from "nanoid";
 import { ml_kem768 } from "@noble/post-quantum/ml-kem";
 import { gcm } from "@noble/ciphers/aes";
+import { sha256 } from "@noble/hashes/sha256";
+import { scrypt } from "@noble/hashes/scrypt";
 import { randomBytes } from "crypto";
 
 /** Byte sizes fixed by the ML-KEM-768 parameter set (FIPS 203) */
@@ -9,6 +11,8 @@ const SECRET_KEY_BYTES = 2400;
 const KEM_CIPHERTEXT_BYTES = 1088;
 /** AES-GCM standard nonce size */
 const NONCE_BYTES = 12;
+/** scrypt salt size for password-protected links */
+const KDF_SALT_BYTES = 16;
 
 /**
  * An ML-KEM-768 key pair, base64-encoded for easy storage.
@@ -160,6 +164,30 @@ export function generateKeyPair(): KeyPair {
 }
 
 /**
+ * AES key for a payload: the raw ML-KEM shared secret, or — for
+ * password-protected links — sha256(sharedSecret || scrypt(password, salt)).
+ */
+function deriveAesKey(
+  sharedSecret: Uint8Array,
+  password: string | undefined,
+  kdfSalt: Uint8Array | undefined
+): Uint8Array {
+  if (password === undefined || kdfSalt === undefined) {
+    return sharedSecret;
+  }
+  const stretched = scrypt(password, kdfSalt, {
+    N: 2 ** 15,
+    r: 8,
+    p: 1,
+    dkLen: 32,
+  });
+  const combined = new Uint8Array(sharedSecret.length + stretched.length);
+  combined.set(sharedSecret);
+  combined.set(stretched, sharedSecret.length);
+  return sha256(combined);
+}
+
+/**
  * Decrypts a payload and returns its full contents.
  * @param payload The encrypted payload from createShortUrl
  * @param secretKey One base64 secret key, or several to try in order
@@ -231,10 +259,18 @@ function tryDecrypt(
     if (nonce.length !== NONCE_BYTES) {
       return null;
     }
+    let kdfSalt: Uint8Array | undefined;
+    if (payload.kdfSalt) {
+      kdfSalt = fromBase64(payload.kdfSalt);
+      if (kdfSalt.length !== KDF_SALT_BYTES) {
+        return null;
+      }
+    }
     // A wrong-but-valid secret key doesn't throw here (ML-KEM implicit
     // rejection); it yields a different shared secret and GCM auth fails below.
     const sharedSecret = ml_kem768.decapsulate(kemCiphertext, secretKeyBytes);
-    const plaintext = gcm(sharedSecret, nonce).decrypt(
+    const aesKey = deriveAesKey(sharedSecret, password, kdfSalt);
+    const plaintext = gcm(aesKey, nonce).decrypt(
       fromBase64(payload.ciphertext)
     );
     return parsePlaintext(Buffer.from(plaintext).toString("utf8"));
@@ -318,17 +354,25 @@ export class ShortyQ {
 
     const { cipherText, sharedSecret } = ml_kem768.encapsulate(this.publicKey);
     const nonce = new Uint8Array(randomBytes(NONCE_BYTES));
-    const ciphertext = gcm(sharedSecret, nonce).encrypt(
+    let aesKey: Uint8Array = sharedSecret;
+    let kdfSaltB64: string | undefined;
+    if (options.password !== undefined) {
+      const kdfSalt = new Uint8Array(randomBytes(KDF_SALT_BYTES));
+      aesKey = deriveAesKey(sharedSecret, options.password, kdfSalt);
+      kdfSaltB64 = toBase64(kdfSalt);
+    }
+    const ciphertext = gcm(aesKey, nonce).encrypt(
       new Uint8Array(Buffer.from(plaintext, "utf8"))
     );
 
-    return {
-      shortCode: nanoid(this.urlLength),
-      payload: {
-        kemCiphertext: toBase64(cipherText),
-        nonce: toBase64(nonce),
-        ciphertext: toBase64(ciphertext),
-      },
+    const payload: EncryptedPayload = {
+      kemCiphertext: toBase64(cipherText),
+      nonce: toBase64(nonce),
+      ciphertext: toBase64(ciphertext),
     };
+    if (kdfSaltB64 !== undefined) {
+      payload.kdfSalt = kdfSaltB64;
+    }
+    return { shortCode: nanoid(this.urlLength), payload };
   }
 }

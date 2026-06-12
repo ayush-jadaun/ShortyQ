@@ -319,3 +319,45 @@ describe("envelope: expiry and metadata", () => {
     expect(decryptPayload(legacy, secretKey)).toEqual({ url });
   });
 });
+
+describe("password-protected links", () => {
+  const { publicKey, secretKey } = generateKeyPair();
+  const shortyQ = new ShortyQ({ publicKey });
+  const url = "https://example.com/private";
+
+  it("round-trips with the correct password", () => {
+    const { payload } = shortyQ.createShortUrl(url, { password: "hunter2" });
+    expect(payload.kdfSalt).toBeDefined();
+    expect(Buffer.from(payload.kdfSalt!, "base64")).toHaveLength(16);
+    expect(decryptUrl(payload, secretKey, { password: "hunter2" })).toBe(url);
+  });
+
+  it("returns null with a wrong password", () => {
+    const { payload } = shortyQ.createShortUrl(url, { password: "hunter2" });
+    expect(decryptUrl(payload, secretKey, { password: "hunter3" })).toBeNull();
+  });
+
+  it("returns null when the password is missing", () => {
+    const { payload } = shortyQ.createShortUrl(url, { password: "hunter2" });
+    expect(decryptUrl(payload, secretKey)).toBeNull();
+  });
+
+  it("returns null when a password is supplied for a passwordless link", () => {
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptUrl(payload, secretKey, { password: "hunter2" })).toBeNull();
+  });
+
+  it("combines password with metadata and expiry", () => {
+    jest.useFakeTimers({ now: new Date("2026-06-12T00:00:00Z") });
+    const { payload } = shortyQ.createShortUrl(url, {
+      password: "hunter2",
+      metadata: { tier: "vip" },
+      expiresAt: new Date("2026-06-12T01:00:00Z"),
+    });
+    const result = decryptPayload(payload, secretKey, { password: "hunter2" });
+    expect(result?.url).toBe(url);
+    expect(result?.metadata).toEqual({ tier: "vip" });
+    expect(result?.expiresAt).toEqual(new Date("2026-06-12T01:00:00Z"));
+    jest.useRealTimers();
+  });
+});
