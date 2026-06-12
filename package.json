@@ -1,6 +1,6 @@
 {
   "name": "shortyq",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A secure URL shortener using quantum-inspired encryption techniques",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
