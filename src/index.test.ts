@@ -455,3 +455,37 @@ describe("deterministic short codes", () => {
     ).toThrow("Invalid code key");
   });
 });
+
+describe("vanity short codes", () => {
+  const { publicKey, codeKey } = generateKeyPair();
+  const shortyQ = new ShortyQ({ publicKey, codeKey });
+  const url = "https://example.com/promo";
+
+  it("uses the supplied code verbatim", () => {
+    const { shortCode } = shortyQ.createShortUrl(url, {
+      shortCode: "summer-sale_2026",
+    });
+    expect(shortCode).toBe("summer-sale_2026");
+  });
+
+  it("throws for invalid characters", () => {
+    expect(() =>
+      shortyQ.createShortUrl(url, { shortCode: "no spaces!" })
+    ).toThrow("Invalid custom short code");
+  });
+
+  it("throws for out-of-bounds lengths", () => {
+    expect(() => shortyQ.createShortUrl(url, { shortCode: "abc" })).toThrow(
+      "Invalid custom short code"
+    );
+    expect(() =>
+      shortyQ.createShortUrl(url, { shortCode: "a".repeat(101) })
+    ).toThrow("Invalid custom short code");
+  });
+
+  it("throws when combined with deterministic mode", () => {
+    expect(() =>
+      shortyQ.createShortUrl(url, { shortCode: "promo", deterministic: true })
+    ).toThrow("Cannot combine a custom short code with deterministic mode");
+  });
+});

@@ -414,8 +414,19 @@ export class ShortyQ {
     return { shortCode, payload };
   }
 
-  /** Picks the short code: deterministic HMAC when requested, else nanoid */
+  /** Picks the short code: vanity > deterministic HMAC > nanoid */
   private makeShortCode(url: string, options: CreateShortUrlOptions): string {
+    if (options.shortCode !== undefined && options.deterministic) {
+      throw new Error(
+        "Cannot combine a custom short code with deterministic mode"
+      );
+    }
+    if (options.shortCode !== undefined) {
+      if (!/^[A-Za-z0-9_-]{4,100}$/.test(options.shortCode)) {
+        throw new Error("Invalid custom short code");
+      }
+      return options.shortCode;
+    }
     if (options.deterministic) {
       if (!this.codeKey) {
         throw new Error("Deterministic codes require a codeKey");
