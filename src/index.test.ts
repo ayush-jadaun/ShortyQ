@@ -3,6 +3,7 @@ import {
   generateKeyPair,
   decryptUrl,
   decryptPayload,
+  getKeyId,
   EncryptedPayload,
 } from "./index";
 import { ml_kem768 } from "@noble/post-quantum/ml-kem";
@@ -359,5 +360,41 @@ describe("password-protected links", () => {
     expect(result?.metadata).toEqual({ tier: "vip" });
     expect(result?.expiresAt).toEqual(new Date("2026-06-12T01:00:00Z"));
     jest.useRealTimers();
+  });
+});
+
+describe("key rotation", () => {
+  const pairA = generateKeyPair();
+  const pairB = generateKeyPair();
+  const url = "https://example.com/rotated";
+
+  it("stamps payloads with the public key's keyId", () => {
+    const shortyQ = new ShortyQ({ publicKey: pairA.publicKey });
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(payload.keyId).toBe(getKeyId(pairA.publicKey));
+    expect(Buffer.from(payload.keyId!, "base64")).toHaveLength(8);
+  });
+
+  it("gives different keyIds for different public keys", () => {
+    expect(getKeyId(pairA.publicKey)).not.toBe(getKeyId(pairB.publicKey));
+  });
+
+  it("throws for an invalid public key", () => {
+    expect(() => getKeyId("bm9wZQ==")).toThrow("Invalid ML-KEM-768 public key");
+  });
+
+  it("decrypts with an array containing the right key", () => {
+    const shortyQ = new ShortyQ({ publicKey: pairA.publicKey });
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(
+      decryptUrl(payload, [pairB.secretKey, pairA.secretKey])
+    ).toBe(url);
+  });
+
+  it("returns null when no key in the array matches", () => {
+    const shortyQ = new ShortyQ({ publicKey: pairA.publicKey });
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptUrl(payload, [pairB.secretKey])).toBeNull();
+    expect(decryptUrl(payload, [])).toBeNull();
   });
 });

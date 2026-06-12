@@ -13,6 +13,8 @@ const KEM_CIPHERTEXT_BYTES = 1088;
 const NONCE_BYTES = 12;
 /** scrypt salt size for password-protected links */
 const KDF_SALT_BYTES = 16;
+/** keyId length: leading bytes of sha256(publicKey) */
+const KEY_ID_BYTES = 8;
 
 /**
  * An ML-KEM-768 key pair, base64-encoded for easy storage.
@@ -164,6 +166,19 @@ export function generateKeyPair(): KeyPair {
 }
 
 /**
+ * Advisory identifier for a public key: base64 of the first 8 bytes of
+ * sha256(publicKeyBytes). Stamped on every v2.1 payload so apps can index
+ * which keypair encrypted a record.
+ */
+export function getKeyId(publicKey: string): string {
+  const bytes = fromBase64(publicKey);
+  if (bytes.length !== PUBLIC_KEY_BYTES) {
+    throw new Error("Invalid ML-KEM-768 public key");
+  }
+  return toBase64(sha256(bytes).slice(0, KEY_ID_BYTES));
+}
+
+/**
  * AES key for a payload: the raw ML-KEM shared secret, or — for
  * password-protected links — sha256(sharedSecret || scrypt(password, salt)).
  */
@@ -288,6 +303,7 @@ function tryDecrypt(
  */
 export class ShortyQ {
   private readonly publicKey: Uint8Array;
+  private readonly keyId: string;
   private readonly urlLength: number;
   /** Maximum allowed length for input URLs */
   private readonly MAX_URL_LENGTH = 4096;
@@ -309,6 +325,7 @@ export class ShortyQ {
     if (this.publicKey.length !== PUBLIC_KEY_BYTES) {
       throw new Error("Invalid ML-KEM-768 public key");
     }
+    this.keyId = toBase64(sha256(this.publicKey).slice(0, KEY_ID_BYTES));
 
     const urlLength = options.urlLength ?? 8;
     if (urlLength < this.MIN_CODE_LENGTH) {
@@ -369,6 +386,7 @@ export class ShortyQ {
       kemCiphertext: toBase64(cipherText),
       nonce: toBase64(nonce),
       ciphertext: toBase64(ciphertext),
+      keyId: this.keyId,
     };
     if (kdfSaltB64 !== undefined) {
       payload.kdfSalt = kdfSaltB64;
