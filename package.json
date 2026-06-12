@@ -4,6 +4,9 @@
   "description": "A quantum-safe URL shortener using NIST-standardized post-quantum cryptography (ML-KEM-768)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "shortyq": "dist/cli.js"
+  },
   "files": [
     "dist",
     "README.md",
