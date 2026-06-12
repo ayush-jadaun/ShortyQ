@@ -1,4 +1,9 @@
-import { ShortyQ, generateKeyPair, decryptUrl } from "./index";
+import {
+  ShortyQ,
+  generateKeyPair,
+  decryptUrl,
+  EncryptedPayload,
+} from "./index";
 
 describe("generateKeyPair", () => {
   it("returns base64-encoded keys with correct ML-KEM-768 sizes", () => {
@@ -95,5 +100,76 @@ describe("decryptUrl round-trip", () => {
       })
     );
     results.forEach(({ url, decrypted }) => expect(decrypted).toBe(url));
+  });
+});
+
+describe("decryptUrl failure modes", () => {
+  const { publicKey, secretKey } = generateKeyPair();
+  const shortyQ = new ShortyQ({ publicKey });
+  const url = "https://example.com/secret/path";
+
+  /** Flips the first character of a base64 string to corrupt the bytes */
+  function corrupt(value: string): string {
+    const replacement = value[0] === "A" ? "B" : "A";
+    return replacement + value.slice(1);
+  }
+
+  it("returns null with a wrong secret key", () => {
+    const otherPair = generateKeyPair();
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptUrl(payload, otherPair.secretKey)).toBeNull();
+  });
+
+  it("returns null when ciphertext is tampered with", () => {
+    const { payload } = shortyQ.createShortUrl(url);
+    const tampered = { ...payload, ciphertext: corrupt(payload.ciphertext) };
+    expect(decryptUrl(tampered, secretKey)).toBeNull();
+  });
+
+  it("returns null when nonce is tampered with", () => {
+    const { payload } = shortyQ.createShortUrl(url);
+    const tampered = { ...payload, nonce: corrupt(payload.nonce) };
+    expect(decryptUrl(tampered, secretKey)).toBeNull();
+  });
+
+  it("returns null when kemCiphertext is tampered with", () => {
+    const { payload } = shortyQ.createShortUrl(url);
+    const tampered = {
+      ...payload,
+      kemCiphertext: corrupt(payload.kemCiphertext),
+    };
+    expect(decryptUrl(tampered, secretKey)).toBeNull();
+  });
+
+  it("returns null for garbage payload fields", () => {
+    const garbage = {
+      kemCiphertext: "not-real-data",
+      nonce: "nope",
+      ciphertext: "garbage",
+    };
+    expect(decryptUrl(garbage, secretKey)).toBeNull();
+  });
+
+  it("returns null for a partial payload", () => {
+    const { payload } = shortyQ.createShortUrl(url);
+    const partial = {
+      kemCiphertext: payload.kemCiphertext,
+      nonce: payload.nonce,
+    } as EncryptedPayload;
+    expect(decryptUrl(partial, secretKey)).toBeNull();
+  });
+
+  it("returns null for a null payload", () => {
+    expect(decryptUrl(null as any, secretKey)).toBeNull();
+  });
+
+  it("returns null for an empty secret key", () => {
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptUrl(payload, "")).toBeNull();
+  });
+
+  it("returns null for a malformed secret key", () => {
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptUrl(payload, "dG9vLXNob3J0")).toBeNull();
   });
 });
