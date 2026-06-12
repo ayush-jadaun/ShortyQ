@@ -489,3 +489,31 @@ describe("vanity short codes", () => {
     ).toThrow("Cannot combine a custom short code with deterministic mode");
   });
 });
+
+describe("batch API", () => {
+  const { publicKey, secretKey } = generateKeyPair();
+  const shortyQ = new ShortyQ({ publicKey });
+
+  it("shortens a mixed list of strings and option objects", () => {
+    const results = shortyQ.createShortUrls([
+      "https://example.com/one",
+      { url: "https://example.com/two", options: { metadata: { i: 2 } } },
+      { url: "https://example.com/three" },
+    ]);
+    expect(results).toHaveLength(3);
+    expect(decryptUrl(results[0].payload, secretKey)).toBe(
+      "https://example.com/one"
+    );
+    const two = decryptPayload(results[1].payload, secretKey);
+    expect(two?.url).toBe("https://example.com/two");
+    expect(two?.metadata).toEqual({ i: 2 });
+    const codes = new Set(results.map((r) => r.shortCode));
+    expect(codes.size).toBe(3);
+  });
+
+  it("throws on the first invalid item", () => {
+    expect(() =>
+      shortyQ.createShortUrls(["https://example.com/ok", "not-a-url"])
+    ).toThrow("Invalid URL format");
+  });
+});

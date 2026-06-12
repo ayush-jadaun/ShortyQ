@@ -414,6 +414,20 @@ export class ShortyQ {
     return { shortCode, payload };
   }
 
+  /**
+   * Shortens several URLs in one call. All-or-nothing: throws on the first
+   * invalid item without returning partial results.
+   */
+  public createShortUrls(
+    items: Array<string | { url: string; options?: CreateShortUrlOptions }>
+  ): Array<{ shortCode: string; payload: EncryptedPayload }> {
+    return items.map((item) =>
+      typeof item === "string"
+        ? this.createShortUrl(item)
+        : this.createShortUrl(item.url, item.options)
+    );
+  }
+
   /** Picks the short code: vanity > deterministic HMAC > nanoid */
   private makeShortCode(url: string, options: CreateShortUrlOptions): string {
     if (options.shortCode !== undefined && options.deterministic) {
