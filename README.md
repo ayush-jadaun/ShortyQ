@@ -192,6 +192,37 @@ payloads) learns nothing about the original URLs, including against
 harvest-now-decrypt-later quantum attacks. An attacker with your secret key
 can decrypt everything — guard it accordingly.
 
+## Performance
+
+Measured with `npm run bench` (`benchmarks/compare.ts`) on Node v22.13.1,
+x64, against the old shortyq v1 (from npm) and popular alternatives:
+
+| Operation                               | avg (ms) | p95 (ms) | ops/sec |
+| --------------------------------------- | -------- | -------- | ------- |
+| **shortyq v2.1: createShortUrl**        | 0.51     | 0.72     | ~1,980  |
+| **shortyq v2.1: decryptUrl**            | 0.44     | 0.61     | ~2,260  |
+| **shortyq v2.1: generateKeyPair**       | 0.40     | 0.60     | ~2,490  |
+| shortyq v2.1: create with password      | 139      | 211      | ~7      |
+| shortyq v2.1: decrypt with password     | 123      | 251      | ~8      |
+| shortyq v1.0.1 (old): createShortUrl    | 0.77     | 2.61     | ~1,300  |
+| shortyq v1.0.1 (old): decryptUrl        | 1.46     | 3.34     | ~680    |
+| node crypto AES-256-GCM: encrypt        | 0.006    | 0.007    | ~180,000 |
+| tweetnacl box (X25519): encrypt         | 0.51     | 0.71     | ~1,940  |
+| tweetnacl box (X25519): decrypt         | 0.53     | 1.53     | ~1,890  |
+
+Takeaways:
+
+- **Post-quantum at classical speed:** ML-KEM-768 + AES-256-GCM shortens and
+  decrypts at the same speed as tweetnacl's classical X25519 box — while
+  being quantum-safe.
+- **Faster than v1:** ~1.5x faster shortening and ~3x faster decryption than
+  the old crypto-js implementation, with real security instead of theater.
+- **Password links are slow on purpose:** ~130ms per operation is the scrypt
+  work factor (N=2^15) doing its job against brute force.
+- Raw AES is microseconds; the public-key step dominates — that's the price
+  of "shorten anywhere, decrypt only with the secret key" regardless of
+  which public-key crypto you pick.
+
 ## Migrating from v1
 
 v1's encryption stored its key material alongside the ciphertext, so it was

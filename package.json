@@ -18,6 +18,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "clean": "rimraf dist coverage",
+    "bench": "ts-node benchmarks/compare.ts",
     "prepare": "npm run clean && npm run build",
     "prepublishOnly": "npm test",
     "preversion": "npm run test",
@@ -64,7 +65,10 @@
     "@types/node": "^20.11.24",
     "jest": "^29.7.0",
     "rimraf": "^6.0.1",
+    "shortyq-v1": "npm:shortyq@^1.0.1",
     "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "tweetnacl": "^1.0.3",
     "typescript": "^5.3.3"
   }
 }
