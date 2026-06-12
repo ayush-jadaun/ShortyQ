@@ -2,8 +2,12 @@ import {
   ShortyQ,
   generateKeyPair,
   decryptUrl,
+  decryptPayload,
   EncryptedPayload,
 } from "./index";
+import { ml_kem768 } from "@noble/post-quantum/ml-kem";
+import { gcm } from "@noble/ciphers/aes";
+import { randomBytes } from "crypto";
 
 describe("generateKeyPair", () => {
   it("returns base64-encoded keys with correct ML-KEM-768 sizes", () => {
@@ -228,5 +232,90 @@ describe("validation", () => {
     expect(() => new ShortyQ({ publicKey, urlLength: 101 })).toThrow(
       "URL length cannot exceed 100 characters"
     );
+  });
+});
+
+describe("envelope: expiry and metadata", () => {
+  const { publicKey, secretKey } = generateKeyPair();
+  const shortyQ = new ShortyQ({ publicKey });
+  const url = "https://example.com/campaign";
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("round-trips a plain URL through decryptPayload", () => {
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptPayload(payload, secretKey)).toEqual({ url });
+  });
+
+  it("round-trips metadata", () => {
+    const metadata = { creator: "ayush", tags: ["promo", 7], nested: { a: 1 } };
+    const { payload } = shortyQ.createShortUrl(url, { metadata });
+    const result = decryptPayload(payload, secretKey);
+    expect(result?.url).toBe(url);
+    expect(result?.metadata).toEqual(metadata);
+  });
+
+  it("round-trips expiry and exposes it as a Date", () => {
+    jest.useFakeTimers({ now: new Date("2026-06-12T00:00:00Z") });
+    const expiresAt = new Date("2026-06-12T01:00:00Z");
+    const { payload } = shortyQ.createShortUrl(url, { expiresAt });
+    const result = decryptPayload(payload, secretKey);
+    expect(result?.url).toBe(url);
+    expect(result?.expiresAt).toEqual(expiresAt);
+  });
+
+  it("returns null from both decrypt functions after expiry", () => {
+    jest.useFakeTimers({ now: new Date("2026-06-12T00:00:00Z") });
+    const { payload } = shortyQ.createShortUrl(url, {
+      expiresAt: new Date("2026-06-12T01:00:00Z"),
+    });
+    expect(decryptUrl(payload, secretKey)).toBe(url);
+    jest.setSystemTime(new Date("2026-06-12T02:00:00Z"));
+    expect(decryptUrl(payload, secretKey)).toBeNull();
+    expect(decryptPayload(payload, secretKey)).toBeNull();
+  });
+
+  it("accepts expiresAt as epoch millis", () => {
+    jest.useFakeTimers({ now: new Date("2026-06-12T00:00:00Z") });
+    const epoch = new Date("2026-06-12T01:00:00Z").getTime();
+    const { payload } = shortyQ.createShortUrl(url, { expiresAt: epoch });
+    expect(decryptPayload(payload, secretKey)?.expiresAt).toEqual(
+      new Date(epoch)
+    );
+  });
+
+  it("throws for an expiresAt in the past", () => {
+    expect(() =>
+      shortyQ.createShortUrl(url, { expiresAt: Date.now() - 1000 })
+    ).toThrow("expiresAt must be in the future");
+  });
+
+  it("throws for non-JSON-serializable metadata", () => {
+    expect(() =>
+      shortyQ.createShortUrl(url, { metadata: () => 42 })
+    ).toThrow("Metadata must be JSON-serializable");
+    const circular: any = {};
+    circular.self = circular;
+    expect(() =>
+      shortyQ.createShortUrl(url, { metadata: circular })
+    ).toThrow("Metadata must be JSON-serializable");
+  });
+
+  it("decrypts v2.0-era payloads (bare URL, no extra fields)", () => {
+    const pk = new Uint8Array(Buffer.from(publicKey, "base64"));
+    const { cipherText, sharedSecret } = ml_kem768.encapsulate(pk);
+    const nonce = new Uint8Array(randomBytes(12));
+    const ct = gcm(sharedSecret, nonce).encrypt(
+      new Uint8Array(Buffer.from(url, "utf8"))
+    );
+    const legacy: EncryptedPayload = {
+      kemCiphertext: Buffer.from(cipherText).toString("base64"),
+      nonce: Buffer.from(nonce).toString("base64"),
+      ciphertext: Buffer.from(ct).toString("base64"),
+    };
+    expect(decryptUrl(legacy, secretKey)).toBe(url);
+    expect(decryptPayload(legacy, secretKey)).toEqual({ url });
   });
 });

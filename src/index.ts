@@ -32,6 +32,46 @@ export interface EncryptedPayload {
   nonce: string;
   /** Base64 AES-256-GCM ciphertext including auth tag */
   ciphertext: string;
+  /** Base64 key identifier (8 bytes of sha256(publicKey)) — v2.1+ */
+  keyId?: string;
+  /** Base64 scrypt salt (16 bytes) — present only on password-protected links */
+  kdfSalt?: string;
+}
+
+/**
+ * Options for createShortUrl. All combinable except shortCode + deterministic.
+ */
+export interface CreateShortUrlOptions {
+  /** Expiry as a Date or epoch milliseconds; must be in the future */
+  expiresAt?: Date | number;
+  /** Arbitrary JSON-serializable metadata, encrypted alongside the URL */
+  metadata?: unknown;
+  /** Password required (in addition to the secret key) to decrypt */
+  password?: string;
+  /** Custom (vanity) short code: 4-100 chars of [A-Za-z0-9_-] */
+  shortCode?: string;
+  /** Derive the short code deterministically from the URL (needs codeKey) */
+  deterministic?: boolean;
+}
+
+/** Options for decryptUrl / decryptPayload */
+export interface DecryptOptions {
+  /** Password the link was created with, if any */
+  password?: string;
+}
+
+/** Decrypted contents of a payload */
+export interface DecryptedPayload {
+  url: string;
+  metadata?: unknown;
+  expiresAt?: Date;
+}
+
+/** Wire format of the encrypted JSON envelope */
+interface Envelope {
+  u: string;
+  e?: number;
+  m?: unknown;
 }
 
 /**
@@ -52,6 +92,64 @@ function fromBase64(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, "base64"));
 }
 
+function buildPlaintext(url: string, options: CreateShortUrlOptions): string {
+  const envelope: Envelope = { u: url };
+  if (options.expiresAt !== undefined) {
+    const at =
+      options.expiresAt instanceof Date
+        ? options.expiresAt.getTime()
+        : options.expiresAt;
+    if (!Number.isFinite(at) || at <= Date.now()) {
+      throw new Error("expiresAt must be in the future");
+    }
+    envelope.e = at;
+  }
+  if (options.metadata !== undefined) {
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(options.metadata);
+    } catch (e) {
+      throw new Error("Metadata must be JSON-serializable");
+    }
+    if (serialized === undefined) {
+      throw new Error("Metadata must be JSON-serializable");
+    }
+    envelope.m = options.metadata;
+  }
+  return JSON.stringify(envelope);
+}
+
+/**
+ * Interprets decrypted plaintext: a v2.1 JSON envelope, or a v2.0 bare URL.
+ * Returns null when the envelope says the link has expired.
+ */
+function parsePlaintext(plaintext: string): DecryptedPayload | null {
+  let envelope: any;
+  try {
+    envelope = JSON.parse(plaintext);
+  } catch (e) {
+    return { url: plaintext };
+  }
+  if (
+    typeof envelope !== "object" ||
+    envelope === null ||
+    typeof envelope.u !== "string"
+  ) {
+    return { url: plaintext };
+  }
+  const result: DecryptedPayload = { url: envelope.u };
+  if (envelope.e !== undefined) {
+    if (typeof envelope.e !== "number" || envelope.e <= Date.now()) {
+      return null;
+    }
+    result.expiresAt = new Date(envelope.e);
+  }
+  if (envelope.m !== undefined) {
+    result.metadata = envelope.m;
+  }
+  return result;
+}
+
 /**
  * Generates an ML-KEM-768 key pair. Call once; reuse the public key
  * for shortening and keep the secret key for decryption.
@@ -62,27 +160,65 @@ export function generateKeyPair(): KeyPair {
 }
 
 /**
- * Decrypts an encrypted URL payload using the secret key.
+ * Decrypts a payload and returns its full contents.
  * @param payload The encrypted payload from createShortUrl
- * @param secretKey Base64-encoded ML-KEM-768 secret key from generateKeyPair()
- * @returns The original URL, or null if the key is wrong, the payload is
- *          malformed, or the data was tampered with. Never throws.
+ * @param secretKey One base64 secret key, or several to try in order
+ *                  (key rotation)
+ * @param options Pass the password for password-protected links
+ * @returns { url, metadata?, expiresAt? }, or null if the key is wrong, the
+ *          password is wrong/missing, the link has expired, or the data was
+ *          tampered with. Never throws.
+ */
+export function decryptPayload(
+  payload: EncryptedPayload,
+  secretKey: string | string[],
+  options: DecryptOptions = {}
+): DecryptedPayload | null {
+  if (
+    !payload ||
+    !payload.kemCiphertext ||
+    !payload.nonce ||
+    !payload.ciphertext
+  ) {
+    return null;
+  }
+  const hasSalt = !!payload.kdfSalt;
+  const hasPassword = options.password !== undefined;
+  if (hasSalt !== hasPassword) {
+    return null;
+  }
+  const keys = Array.isArray(secretKey) ? secretKey : [secretKey];
+  for (const key of keys) {
+    const result = tryDecrypt(payload, key, options.password);
+    if (result !== null) {
+      return result;
+    }
+  }
+  return null;
+}
+
+/**
+ * Decrypts an encrypted URL payload using the secret key.
+ * Same contract as decryptPayload, returning only the URL.
  */
 export function decryptUrl(
   payload: EncryptedPayload,
-  secretKey: string
+  secretKey: string | string[],
+  options: DecryptOptions = {}
 ): string | null {
+  const result = decryptPayload(payload, secretKey, options);
+  return result ? result.url : null;
+}
+
+function tryDecrypt(
+  payload: EncryptedPayload,
+  secretKey: string,
+  password?: string
+): DecryptedPayload | null {
   try {
-    if (
-      !payload ||
-      !payload.kemCiphertext ||
-      !payload.nonce ||
-      !payload.ciphertext ||
-      !secretKey
-    ) {
+    if (!secretKey) {
       return null;
     }
-
     const secretKeyBytes = fromBase64(secretKey);
     if (secretKeyBytes.length !== SECRET_KEY_BYTES) {
       return null;
@@ -95,14 +231,13 @@ export function decryptUrl(
     if (nonce.length !== NONCE_BYTES) {
       return null;
     }
-
     // A wrong-but-valid secret key doesn't throw here (ML-KEM implicit
     // rejection); it yields a different shared secret and GCM auth fails below.
     const sharedSecret = ml_kem768.decapsulate(kemCiphertext, secretKeyBytes);
     const plaintext = gcm(sharedSecret, nonce).decrypt(
       fromBase64(payload.ciphertext)
     );
-    return Buffer.from(plaintext).toString("utf8");
+    return parsePlaintext(Buffer.from(plaintext).toString("utf8"));
   } catch (error) {
     return null;
   }
@@ -158,7 +293,10 @@ export class ShortyQ {
    * @returns The short code and an encrypted payload safe for DB storage
    * @throws Error if URL is empty, invalid, or exceeds maximum length
    */
-  public createShortUrl(originalUrl: string): {
+  public createShortUrl(
+    originalUrl: string,
+    options: CreateShortUrlOptions = {}
+  ): {
     shortCode: string;
     payload: EncryptedPayload;
   } {
@@ -176,10 +314,12 @@ export class ShortyQ {
       );
     }
 
+    const plaintext = buildPlaintext(originalUrl, options);
+
     const { cipherText, sharedSecret } = ml_kem768.encapsulate(this.publicKey);
     const nonce = new Uint8Array(randomBytes(NONCE_BYTES));
     const ciphertext = gcm(sharedSecret, nonce).encrypt(
-      new Uint8Array(Buffer.from(originalUrl, "utf8"))
+      new Uint8Array(Buffer.from(plaintext, "utf8"))
     );
 
     return {
