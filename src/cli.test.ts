@@ -26,8 +26,8 @@ describe("CLI", () => {
     const pub = out.match(/^SHORTYQ_PUBLIC_KEY=(.+)$/m)?.[1];
     const sec = out.match(/^SHORTYQ_SECRET_KEY=(.+)$/m)?.[1];
     const code = out.match(/^SHORTYQ_CODE_KEY=(.+)$/m)?.[1];
-    expect(Buffer.from(pub!, "base64")).toHaveLength(1184);
-    expect(Buffer.from(sec!, "base64")).toHaveLength(2400);
+    expect(Buffer.from(pub!, "base64")).toHaveLength(1216);
+    expect(Buffer.from(sec!, "base64")).toHaveLength(2432);
     expect(Buffer.from(code!, "base64")).toHaveLength(32);
   });
 
@@ -35,8 +35,8 @@ describe("CLI", () => {
     const exitCode = runCli(["keygen", "--json"]);
     expect(exitCode).toBe(0);
     const pair = JSON.parse(logs.join("\n"));
-    expect(Buffer.from(pair.publicKey, "base64")).toHaveLength(1184);
-    expect(Buffer.from(pair.secretKey, "base64")).toHaveLength(2400);
+    expect(Buffer.from(pair.publicKey, "base64")).toHaveLength(1216);
+    expect(Buffer.from(pair.secretKey, "base64")).toHaveLength(2432);
     expect(Buffer.from(pair.codeKey, "base64")).toHaveLength(32);
   });
 

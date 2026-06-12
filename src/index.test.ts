@@ -11,10 +11,21 @@ import { gcm } from "@noble/ciphers/aes";
 import { randomBytes } from "crypto";
 
 describe("generateKeyPair", () => {
-  it("returns base64-encoded keys with correct ML-KEM-768 sizes", () => {
+  it("returns base64-encoded hybrid keys with correct sizes", () => {
     const { publicKey, secretKey } = generateKeyPair();
-    expect(Buffer.from(publicKey, "base64")).toHaveLength(1184);
-    expect(Buffer.from(secretKey, "base64")).toHaveLength(2400);
+    // hybrid: ML-KEM-768 part ‖ X25519 part
+    expect(Buffer.from(publicKey, "base64")).toHaveLength(1184 + 32);
+    expect(Buffer.from(secretKey, "base64")).toHaveLength(2400 + 32);
+  });
+
+  it("getKeyId accepts legacy and hybrid public keys", () => {
+    const hybrid = generateKeyPair().publicKey;
+    const legacy = Buffer.from(hybrid, "base64")
+      .subarray(0, 1184)
+      .toString("base64");
+    expect(Buffer.from(getKeyId(hybrid), "base64")).toHaveLength(8);
+    expect(Buffer.from(getKeyId(legacy), "base64")).toHaveLength(8);
+    expect(getKeyId(hybrid)).not.toBe(getKeyId(legacy));
   });
 
   it("generates a different key pair on each call", () => {
@@ -305,7 +316,11 @@ describe("envelope: expiry and metadata", () => {
   });
 
   it("decrypts v2.0-era payloads (bare URL, no extra fields)", () => {
-    const pk = new Uint8Array(Buffer.from(publicKey, "base64"));
+    // v2.0 payloads were encrypted to a bare ML-KEM key (the hybrid key's prefix)
+    const pk = new Uint8Array(Buffer.from(publicKey, "base64")).subarray(
+      0,
+      1184
+    );
     const { cipherText, sharedSecret } = ml_kem768.encapsulate(pk);
     const nonce = new Uint8Array(randomBytes(12));
     const ct = gcm(sharedSecret, nonce).encrypt(
@@ -515,5 +530,92 @@ describe("batch API", () => {
     expect(() =>
       shortyQ.createShortUrls(["https://example.com/ok", "not-a-url"])
     ).toThrow("Invalid URL format");
+  });
+});
+
+describe("hybrid X25519 + ML-KEM (v2.2)", () => {
+  const pair = generateKeyPair(); // hybrid
+  const url = "https://example.com/hybrid";
+
+  it("round-trips with hybrid keys and stamps x25519Ciphertext", () => {
+    const shortyQ = new ShortyQ({ publicKey: pair.publicKey });
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(payload.x25519Ciphertext).toBeDefined();
+    expect(Buffer.from(payload.x25519Ciphertext!, "base64")).toHaveLength(32);
+    expect(decryptUrl(payload, pair.secretKey)).toBe(url);
+  });
+
+  it("composes with passwords, metadata, and expiry", () => {
+    jest.useFakeTimers({ now: new Date("2026-06-12T00:00:00Z") });
+    const shortyQ = new ShortyQ({ publicKey: pair.publicKey });
+    const { payload } = shortyQ.createShortUrl(url, {
+      password: "hunter2",
+      metadata: { mode: "hybrid" },
+      expiresAt: new Date("2026-06-12T01:00:00Z"),
+    });
+    const result = decryptPayload(payload, pair.secretKey, {
+      password: "hunter2",
+    });
+    expect(result?.url).toBe(url);
+    expect(result?.metadata).toEqual({ mode: "hybrid" });
+    expect(decryptUrl(payload, pair.secretKey)).toBeNull(); // missing password
+    jest.useRealTimers();
+  });
+
+  it("legacy keys still produce and decrypt pure payloads", () => {
+    const legacyPk = Buffer.from(pair.publicKey, "base64")
+      .subarray(0, 1184)
+      .toString("base64");
+    const legacySk = Buffer.from(pair.secretKey, "base64")
+      .subarray(0, 2400)
+      .toString("base64");
+    const shortyQ = new ShortyQ({ publicKey: legacyPk });
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(payload.x25519Ciphertext).toBeUndefined();
+    expect(decryptUrl(payload, legacySk)).toBe(url);
+  });
+
+  it("hybrid secret key decrypts a pure payload for its ML-KEM half", () => {
+    const legacyPk = Buffer.from(pair.publicKey, "base64")
+      .subarray(0, 1184)
+      .toString("base64");
+    const shortyQ = new ShortyQ({ publicKey: legacyPk });
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptUrl(payload, pair.secretKey)).toBe(url);
+  });
+
+  it("legacy secret key returns null for hybrid payloads", () => {
+    const shortyQ = new ShortyQ({ publicKey: pair.publicKey });
+    const { payload } = shortyQ.createShortUrl(url);
+    const legacySk = Buffer.from(pair.secretKey, "base64")
+      .subarray(0, 2400)
+      .toString("base64");
+    expect(decryptUrl(payload, legacySk)).toBeNull();
+  });
+
+  it("returns null for tampered or wrong-size x25519Ciphertext", () => {
+    const shortyQ = new ShortyQ({ publicKey: pair.publicKey });
+    const { payload } = shortyQ.createShortUrl(url);
+    const flipped =
+      (payload.x25519Ciphertext![0] === "A" ? "B" : "A") +
+      payload.x25519Ciphertext!.slice(1);
+    expect(
+      decryptUrl({ ...payload, x25519Ciphertext: flipped }, pair.secretKey)
+    ).toBeNull();
+    expect(
+      decryptUrl({ ...payload, x25519Ciphertext: "c2hvcnQ=" }, pair.secretKey)
+    ).toBeNull();
+  });
+
+  it("rotation arrays may mix legacy and hybrid keys", () => {
+    const other = generateKeyPair();
+    const legacySkOfOther = Buffer.from(other.secretKey, "base64")
+      .subarray(0, 2400)
+      .toString("base64");
+    const shortyQ = new ShortyQ({ publicKey: pair.publicKey });
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(
+      decryptUrl(payload, [legacySkOfOther, other.secretKey, pair.secretKey])
+    ).toBe(url);
   });
 });

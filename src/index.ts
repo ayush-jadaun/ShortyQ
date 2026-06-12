@@ -4,6 +4,7 @@ import { gcm } from "@noble/ciphers/aes";
 import { sha256 } from "@noble/hashes/sha256";
 import { hmac } from "@noble/hashes/hmac";
 import { scrypt } from "@noble/hashes/scrypt";
+import { x25519 } from "@noble/curves/ed25519";
 import { randomBytes } from "crypto";
 
 /** Byte sizes fixed by the ML-KEM-768 parameter set (FIPS 203) */
@@ -18,15 +19,24 @@ const KDF_SALT_BYTES = 16;
 const KEY_ID_BYTES = 8;
 /** HMAC key size for deterministic short codes */
 const CODE_KEY_BYTES = 32;
+/** X25519 key/ciphertext size */
+const X25519_BYTES = 32;
+/** Hybrid key sizes: ML-KEM part ‖ X25519 part */
+const HYBRID_PUBLIC_KEY_BYTES = PUBLIC_KEY_BYTES + X25519_BYTES;
+const HYBRID_SECRET_KEY_BYTES = SECRET_KEY_BYTES + X25519_BYTES;
+/** Domain-separation label for the hybrid combiner */
+const HYBRID_LABEL = new Uint8Array(
+  Buffer.from("shortyq-hybrid-v1", "utf8")
+);
 
 /**
  * An ML-KEM-768 key pair, base64-encoded for easy storage.
  * Store the secretKey in an env var or KMS — never in the database.
  */
 export interface KeyPair {
-  /** Base64-encoded ML-KEM-768 public key (safe to embed in app config) */
+  /** Base64-encoded hybrid public key: ML-KEM-768 ‖ X25519 (safe to embed in app config) */
   publicKey: string;
-  /** Base64-encoded ML-KEM-768 secret key (keep out of the database) */
+  /** Base64-encoded hybrid secret key: ML-KEM-768 ‖ X25519 (keep out of the database) */
   secretKey: string;
   /** Base64-encoded 32-byte HMAC key for deterministic short codes */
   codeKey: string;
@@ -47,6 +57,8 @@ export interface EncryptedPayload {
   keyId?: string;
   /** Base64 scrypt salt (16 bytes) — present only on password-protected links */
   kdfSalt?: string;
+  /** Base64 X25519 ephemeral public key (32 bytes) — hybrid payloads only (v2.2+) */
+  x25519Ciphertext?: string;
 }
 
 /**
@@ -103,6 +115,16 @@ function toBase64(bytes: Uint8Array): string {
 
 function fromBase64(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, "base64"));
+}
+
+function concatBytes(...arrays: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(arrays.reduce((n, a) => n + a.length, 0));
+  let offset = 0;
+  for (const a of arrays) {
+    out.set(a, offset);
+    offset += a.length;
+  }
+  return out;
 }
 
 function buildPlaintext(url: string, options: CreateShortUrlOptions): string {
@@ -164,14 +186,18 @@ function parsePlaintext(plaintext: string): DecryptedPayload | null {
 }
 
 /**
- * Generates an ML-KEM-768 key pair. Call once; reuse the public key
- * for shortening and keep the secret key for decryption.
+ * Generates a hybrid ML-KEM-768 + X25519 key pair (v2.2+): confidentiality
+ * holds if EITHER algorithm survives. Call once; reuse the public key for
+ * shortening and keep the secret key for decryption. Legacy pure ML-KEM
+ * keys (from v2.0/v2.1) remain fully supported everywhere.
  */
 export function generateKeyPair(): KeyPair {
   const { publicKey, secretKey } = ml_kem768.keygen();
+  const xSecret = x25519.utils.randomPrivateKey();
+  const xPublic = x25519.getPublicKey(xSecret);
   return {
-    publicKey: toBase64(publicKey),
-    secretKey: toBase64(secretKey),
+    publicKey: toBase64(concatBytes(publicKey, xPublic)),
+    secretKey: toBase64(concatBytes(secretKey, xSecret)),
     codeKey: toBase64(new Uint8Array(randomBytes(CODE_KEY_BYTES))),
   };
 }
@@ -183,7 +209,10 @@ export function generateKeyPair(): KeyPair {
  */
 export function getKeyId(publicKey: string): string {
   const bytes = fromBase64(publicKey);
-  if (bytes.length !== PUBLIC_KEY_BYTES) {
+  if (
+    bytes.length !== PUBLIC_KEY_BYTES &&
+    bytes.length !== HYBRID_PUBLIC_KEY_BYTES
+  ) {
     throw new Error("Invalid ML-KEM-768 public key");
   }
   return toBase64(sha256(bytes).slice(0, KEY_ID_BYTES));
@@ -274,7 +303,14 @@ function tryDecrypt(
       return null;
     }
     const secretKeyBytes = fromBase64(secretKey);
-    if (secretKeyBytes.length !== SECRET_KEY_BYTES) {
+    if (
+      secretKeyBytes.length !== SECRET_KEY_BYTES &&
+      secretKeyBytes.length !== HYBRID_SECRET_KEY_BYTES
+    ) {
+      return null;
+    }
+    const isHybridPayload = payload.x25519Ciphertext !== undefined;
+    if (isHybridPayload && secretKeyBytes.length !== HYBRID_SECRET_KEY_BYTES) {
       return null;
     }
     const kemCiphertext = fromBase64(payload.kemCiphertext);
@@ -294,8 +330,20 @@ function tryDecrypt(
     }
     // A wrong-but-valid secret key doesn't throw here (ML-KEM implicit
     // rejection); it yields a different shared secret and GCM auth fails below.
-    const sharedSecret = ml_kem768.decapsulate(kemCiphertext, secretKeyBytes);
-    const aesKey = deriveAesKey(sharedSecret, password, kdfSalt);
+    const mlkemSk = secretKeyBytes.subarray(0, SECRET_KEY_BYTES);
+    const ssM = ml_kem768.decapsulate(kemCiphertext, mlkemSk);
+    let baseKey: Uint8Array = ssM;
+    if (isHybridPayload) {
+      const ctX = fromBase64(payload.x25519Ciphertext!);
+      if (ctX.length !== X25519_BYTES) {
+        return null;
+      }
+      const xSk = secretKeyBytes.subarray(SECRET_KEY_BYTES);
+      const xPk = x25519.getPublicKey(xSk);
+      const ssX = x25519.getSharedSecret(xSk, ctX);
+      baseKey = sha256(concatBytes(HYBRID_LABEL, ssM, ssX, ctX, xPk));
+    }
+    const aesKey = deriveAesKey(baseKey, password, kdfSalt);
     const plaintext = gcm(aesKey, nonce).decrypt(
       fromBase64(payload.ciphertext)
     );
@@ -334,7 +382,10 @@ export class ShortyQ {
       throw new Error("Public key is required");
     }
     this.publicKey = fromBase64(options.publicKey);
-    if (this.publicKey.length !== PUBLIC_KEY_BYTES) {
+    if (
+      this.publicKey.length !== PUBLIC_KEY_BYTES &&
+      this.publicKey.length !== HYBRID_PUBLIC_KEY_BYTES
+    ) {
       throw new Error("Invalid ML-KEM-768 public key");
     }
     this.keyId = toBase64(sha256(this.publicKey).slice(0, KEY_ID_BYTES));
@@ -389,13 +440,25 @@ export class ShortyQ {
     const plaintext = buildPlaintext(originalUrl, options);
     const shortCode = this.makeShortCode(originalUrl, options);
 
-    const { cipherText, sharedSecret } = ml_kem768.encapsulate(this.publicKey);
+    const mlkemPk = this.publicKey.subarray(0, PUBLIC_KEY_BYTES);
+    const { cipherText, sharedSecret: ssM } = ml_kem768.encapsulate(mlkemPk);
+    let baseKey: Uint8Array = ssM;
+    let x25519CtB64: string | undefined;
+    if (this.publicKey.length === HYBRID_PUBLIC_KEY_BYTES) {
+      const xPk = this.publicKey.subarray(PUBLIC_KEY_BYTES);
+      const eSk = x25519.utils.randomPrivateKey();
+      const ctX = x25519.getPublicKey(eSk);
+      const ssX = x25519.getSharedSecret(eSk, xPk);
+      baseKey = sha256(concatBytes(HYBRID_LABEL, ssM, ssX, ctX, xPk));
+      x25519CtB64 = toBase64(ctX);
+    }
+
     const nonce = new Uint8Array(randomBytes(NONCE_BYTES));
-    let aesKey: Uint8Array = sharedSecret;
+    let aesKey: Uint8Array = baseKey;
     let kdfSaltB64: string | undefined;
     if (options.password !== undefined) {
       const kdfSalt = new Uint8Array(randomBytes(KDF_SALT_BYTES));
-      aesKey = deriveAesKey(sharedSecret, options.password, kdfSalt);
+      aesKey = deriveAesKey(baseKey, options.password, kdfSalt);
       kdfSaltB64 = toBase64(kdfSalt);
     }
     const ciphertext = gcm(aesKey, nonce).encrypt(
@@ -410,6 +473,9 @@ export class ShortyQ {
     };
     if (kdfSaltB64 !== undefined) {
       payload.kdfSalt = kdfSaltB64;
+    }
+    if (x25519CtB64 !== undefined) {
+      payload.x25519Ciphertext = x25519CtB64;
     }
     return { shortCode, payload };
   }
