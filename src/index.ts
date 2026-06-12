@@ -62,6 +62,53 @@ export function generateKeyPair(): KeyPair {
 }
 
 /**
+ * Decrypts an encrypted URL payload using the secret key.
+ * @param payload The encrypted payload from createShortUrl
+ * @param secretKey Base64-encoded ML-KEM-768 secret key from generateKeyPair()
+ * @returns The original URL, or null if the key is wrong, the payload is
+ *          malformed, or the data was tampered with. Never throws.
+ */
+export function decryptUrl(
+  payload: EncryptedPayload,
+  secretKey: string
+): string | null {
+  try {
+    if (
+      !payload ||
+      !payload.kemCiphertext ||
+      !payload.nonce ||
+      !payload.ciphertext ||
+      !secretKey
+    ) {
+      return null;
+    }
+
+    const secretKeyBytes = fromBase64(secretKey);
+    if (secretKeyBytes.length !== SECRET_KEY_BYTES) {
+      return null;
+    }
+    const kemCiphertext = fromBase64(payload.kemCiphertext);
+    if (kemCiphertext.length !== KEM_CIPHERTEXT_BYTES) {
+      return null;
+    }
+    const nonce = fromBase64(payload.nonce);
+    if (nonce.length !== NONCE_BYTES) {
+      return null;
+    }
+
+    // A wrong-but-valid secret key doesn't throw here (ML-KEM implicit
+    // rejection); it yields a different shared secret and GCM auth fails below.
+    const sharedSecret = ml_kem768.decapsulate(kemCiphertext, secretKeyBytes);
+    const plaintext = gcm(sharedSecret, nonce).decrypt(
+      fromBase64(payload.ciphertext)
+    );
+    return Buffer.from(plaintext).toString("utf8");
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
  * ShortyQ - a quantum-safe URL shortener.
  *
  * Encrypts URLs with ML-KEM-768 (NIST FIPS 203) + AES-256-GCM.

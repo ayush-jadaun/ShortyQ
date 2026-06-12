@@ -1,4 +1,4 @@
-import { ShortyQ, generateKeyPair } from "./index";
+import { ShortyQ, generateKeyPair, decryptUrl } from "./index";
 
 describe("generateKeyPair", () => {
   it("returns base64-encoded keys with correct ML-KEM-768 sizes", () => {
@@ -56,5 +56,44 @@ describe("ShortyQ.createShortUrl", () => {
     );
     expect(result1.payload.nonce).not.toBe(result2.payload.nonce);
     expect(result1.payload.ciphertext).not.toBe(result2.payload.ciphertext);
+  });
+});
+
+describe("decryptUrl round-trip", () => {
+  const { publicKey, secretKey } = generateKeyPair();
+  const shortyQ = new ShortyQ({ publicKey });
+
+  it.each([
+    ["simple", "https://example.com/simple"],
+    ["query params", "https://api.example.com/v1/users?id=123&format=json"],
+    [
+      "special chars",
+      "https://example.com/path/with/special/chars/!@#$%^&*()",
+    ],
+    ["unicode", "https://example.com/unicode/path/🚀/测试/тест"],
+    ["fragment", "https://example.com/page#section1"],
+  ])("round-trips a URL with %s", (_label, url) => {
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptUrl(payload, secretKey)).toBe(url);
+  });
+
+  it("round-trips a maximum-length URL", () => {
+    const url = `https://example.com/${"a".repeat(2048)}`;
+    const { payload } = shortyQ.createShortUrl(url);
+    expect(decryptUrl(payload, secretKey)).toBe(url);
+  });
+
+  it("round-trips many URLs concurrently", async () => {
+    const urls = Array.from(
+      { length: 100 },
+      (_, i) => `https://example.com/test/${i}`
+    );
+    const results = await Promise.all(
+      urls.map((url) => {
+        const { payload } = shortyQ.createShortUrl(url);
+        return { url, decrypted: decryptUrl(payload, secretKey) };
+      })
+    );
+    results.forEach(({ url, decrypted }) => expect(decrypted).toBe(url));
   });
 });
