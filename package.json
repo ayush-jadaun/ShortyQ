@@ -1,7 +1,7 @@
 {
   "name": "shortyq",
-  "version": "1.0.1",
-  "description": "A secure URL shortener using quantum-inspired encryption techniques",
+  "version": "2.0.0",
+  "description": "A quantum-safe URL shortener using NIST-standardized post-quantum cryptography (ML-KEM-768)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -22,7 +22,10 @@
   },
   "keywords": [
     "url-shortener",
-    "quantum",
+    "post-quantum",
+    "quantum-safe",
+    "ml-kem",
+    "kyber",
     "encryption",
     "typescript",
     "secure",
@@ -45,7 +48,7 @@
   },
   "homepage": "https://github.com/ayush-jadaun/ShortyQ#readme",
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "@noble/ciphers": "^1.3.0",

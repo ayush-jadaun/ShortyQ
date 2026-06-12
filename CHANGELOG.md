@@ -2,8 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.1/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.0.0] - 2026-06-12
+
+### Changed — BREAKING
+
+- Replaced the "quantum-inspired" crypto with real NIST-standardized
+  post-quantum cryptography: ML-KEM-768 (FIPS 203) + AES-256-GCM via the
+  audited @noble/post-quantum and @noble/ciphers libraries.
+- New key model: `generateKeyPair()` produces a key pair; URLs are encrypted
+  against the public key and can only be decrypted with the secret key.
+  Store the secret key in an env var or KMS — a leaked database reveals
+  nothing.
+- `createShortUrl` now returns `{ shortCode, payload }` where `payload` is
+  `{ kemCiphertext, nonce, ciphertext }` (all base64). The v1 `EncryptedData`
+  shape (`data`/`noise`/`iv`) is gone — it stored the decryption keys next to
+  the ciphertext.
+- `decryptUrl(payload, secretKey)` is now a module-level function requiring
+  the secret key. Still returns `null` on any failure.
+- `ShortyQ` constructor now requires `{ publicKey }`; `quantumSeed` and
+  `saltRounds` options removed.
+- Encryption is authenticated (AES-256-GCM): tampered data fails decryption.
+- Node >= 18 required.
+
+### Removed
+
+- `crypto-js` dependency (discontinued upstream) and the Math.sin-based
+  "quantum noise" generator.
+- v1 payloads cannot be decrypted by v2. There is no migration path because
+  v1 "encryption" was reversible from stored data alone: decrypt v1 records
+  with shortyq@1 and re-encrypt with v2 if you need to keep them.
+
+[2.0.0]: https://github.com/ayush-jadaun/ShortyQ/releases/tag/v2.0.0
 
 ## [1.0.1] - 2024-03-24
 

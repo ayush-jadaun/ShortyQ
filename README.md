@@ -1,17 +1,33 @@
 # ShortyQ
 
-A secure URL shortener package that uses quantum-inspired encryption techniques to generate and manage short URLs. This package provides a robust and secure way to create shortened URLs while maintaining privacy and security.
+A quantum-safe URL shortener. ShortyQ encrypts URLs with **ML-KEM-768**
+(NIST FIPS 203, the standardized Kyber) and **AES-256-GCM**, so the encrypted
+URLs you store remain confidential even against future quantum computers —
+and a leaked database reveals nothing without your secret key.
+
+## What "quantum-safe" means here
+
+- URLs are encrypted using a [KEM+DEM construction](https://en.wikipedia.org/wiki/Hybrid_cryptosystem):
+  each URL gets a fresh shared secret encapsulated with ML-KEM-768, then is
+  encrypted with AES-256-GCM.
+- ML-KEM is the post-quantum key-encapsulation standard published by NIST
+  (FIPS 203) and deployed by Signal, Chrome, and iMessage.
+- Decryption requires a secret key that you keep **outside the database**
+  (env var, KMS). Database contents alone are useless to an attacker.
+- Short codes themselves are random IDs (nanoid) — they carry no information
+  about the URL.
+- Crypto comes from the audited [noble](https://paulmillr.com/noble/)
+  libraries: [@noble/post-quantum](https://github.com/paulmillr/noble-post-quantum)
+  and [@noble/ciphers](https://github.com/paulmillr/noble-ciphers).
 
 ## Features
 
-- 🔒 Quantum-inspired encryption for enhanced security
-- ⚙️ Fully configurable URL length and salt rounds
-- 🔄 Multiple rounds of encryption using different algorithms
-- 💾 Flexible storage integration (PostgreSQL, MongoDB, Redis, etc.)
-- 📝 TypeScript support with full type definitions
-- ✅ Comprehensive test coverage (98%+)
-- 🚨 Robust error handling for invalid URLs
-- ⚡ High performance with concurrent operation support
+- 🔐 Real post-quantum encryption (ML-KEM-768, NIST FIPS 203)
+- 🔑 Public-key model: shorten anywhere, decrypt only with the secret key
+- ✅ Authenticated encryption (AES-256-GCM) — tampered data fails closed
+- ⚙️ Configurable short code length (4-100 chars)
+- 💾 Bring your own storage (PostgreSQL, MongoDB, Redis, ...)
+- 📝 TypeScript-first with full type definitions
 
 ## Installation
 
@@ -19,228 +35,96 @@ A secure URL shortener package that uses quantum-inspired encryption techniques 
 npm install shortyq
 ```
 
+Requires Node >= 18.
+
 ## Quick Start
 
-### Basic Usage
-
 ```typescript
-import { ShortyQ } from "shortyq";
+import { ShortyQ, generateKeyPair, decryptUrl } from "shortyq";
 
-// Initialize with default options
-const shortyQ = new ShortyQ();
+// 1. One-time setup: generate a key pair.
+//    Store secretKey in an env var or KMS — NEVER in the database.
+const { publicKey, secretKey } = generateKeyPair();
 
-// Create a short URL with encryption
-const { shortCode, encryptedData } = shortyQ.createShortUrl(
+// 2. Shorten + encrypt (only needs the public key)
+const shortyQ = new ShortyQ({ publicKey });
+const { shortCode, payload } = shortyQ.createShortUrl(
   "https://example.com/long/path"
 );
-console.log(`Short Code: ${shortCode}`); // e.g., "Ax7Yt9"
 
-// Store both shortCode and encryptedData in your database
-await db.save({ shortCode, encryptedData });
+// 3. Store shortCode + payload in your database.
+//    The payload is useless without the secret key.
+await db.save({ shortCode, payload });
 
-// Later, retrieve and decrypt the URL
-const storedData = await db.get(shortCode);
-if (storedData) {
-  const originalUrl = shortyQ.decryptUrl(storedData.encryptedData);
-  console.log(`Original URL: ${originalUrl}`);
-}
+// 4. Resolve: load the payload and decrypt with the secret key
+const stored = await db.get(shortCode);
+const originalUrl = decryptUrl(stored.payload, secretKey);
+// -> "https://example.com/long/path", or null if the key is wrong
+//    or the data was tampered with
 ```
 
-> Visit the `examples` folder for database integration examples with PostgreSQL, MongoDB, and Redis.
+> See the `examples` folder for PostgreSQL, MongoDB, and Redis integrations.
 
-### Advanced Configuration
+## API
+
+### `generateKeyPair(): KeyPair`
+
+Generates an ML-KEM-768 key pair as base64 strings:
+`{ publicKey, secretKey }`. Call once; reuse the keys.
+
+### `new ShortyQ(options)`
+
+| Option      | Type   | Required | Default | Description                                |
+| ----------- | ------ | -------- | ------- | ------------------------------------------ |
+| `publicKey` | string | yes      | —       | Base64 public key from `generateKeyPair()` |
+| `urlLength` | number | no       | 8       | Short code length (4-100)                  |
+
+### `shortyQ.createShortUrl(url): { shortCode, payload }`
+
+Validates the URL (must parse, max 4096 chars), generates a nanoid short
+code, and encrypts the URL against the public key. Every call uses a fresh
+ML-KEM encapsulation. The returned `payload` is
+`{ kemCiphertext, nonce, ciphertext }` — all base64 strings, safe to store.
+
+Throws on empty, invalid, or over-long URLs.
+
+### `decryptUrl(payload, secretKey): string | null`
+
+Decapsulates and decrypts. Returns the original URL, or `null` if the secret
+key is wrong, the payload is malformed, or the data was tampered with. Never
+throws.
+
+## Key handling
 
 ```typescript
-const shortyQ = new ShortyQ({
-  // Length of generated short codes (4-100 chars, default: 8)
-  urlLength: 8,
+// Generate once (e.g. a setup script), then keep the secret key in
+// your secret manager:
+const { publicKey, secretKey } = generateKeyPair();
+console.log("SHORTYQ_PUBLIC_KEY=" + publicKey);
+console.log("SHORTYQ_SECRET_KEY=" + secretKey); // -> env var / KMS
 
-  // PBKDF2 iterations for key derivation (default: 10)
-  // Higher values = more secure but slower
-  saltRounds: 12,
-
-  // Seed for quantum noise generation (default: random)
-  // Use fixed value for reproducible results
-  quantumSeed: 42,
-});
+// In your app:
+const shortyQ = new ShortyQ({ publicKey: process.env.SHORTYQ_PUBLIC_KEY! });
+const url = decryptUrl(payload, process.env.SHORTYQ_SECRET_KEY!);
 ```
 
-### Configuration Options
+**Threat model:** an attacker with a full copy of your database (short codes +
+payloads) learns nothing about the original URLs, including against
+harvest-now-decrypt-later quantum attacks. An attacker with your secret key
+can decrypt everything — guard it accordingly.
 
-| Option        | Type   | Default | Range | Description                          |
-| ------------- | ------ | ------- | ----- | ------------------------------------ |
-| `urlLength`   | number | 8       | 4-100 | Length of generated short codes      |
-| `saltRounds`  | number | 10      | 1-∞   | PBKDF2 iterations for key derivation |
-| `quantumSeed` | number | random  | any   | Seed for quantum noise generation    |
+## Migrating from v1
 
-### Security Best Practices
+v1's encryption stored its key material alongside the ciphertext, so it was
+obfuscation rather than encryption — that's why v2 is a breaking rewrite.
 
-1. **Salt Rounds**
-
-   - Default: 10 rounds
-   - Recommended: 12-15 rounds for production
-   - Higher values increase security but impact performance
-   - Example: `saltRounds: 15` for high-security applications
-
-2. **URL Length**
-
-   - Minimum: 4 characters
-   - Maximum: 100 characters
-   - Recommended: 8-12 characters for good balance
-   - Example: `urlLength: 10` for production use
-
-3. **Quantum Seed**
-   - Default: Random value
-   - Use fixed value for reproducible results
-   - Example: `quantumSeed: process.env.QUANTUM_SEED`
-
-### Error Handling
-
-```typescript
-try {
-  // Validate URL format
-  const { shortCode, encryptedData } = shortyQ.createShortUrl("invalid-url");
-} catch (error) {
-  if (error.message === "Invalid URL format") {
-    console.error("Please provide a valid URL");
-  } else if (error.message.includes("URL length")) {
-    console.error("URL length is out of bounds");
-  } else {
-    console.error("Error:", error.message);
-  }
-}
-
-// Handle decryption failures gracefully
-const originalUrl = shortyQ.decryptUrl(invalidData);
-if (originalUrl === null) {
-  console.error("Failed to decrypt URL - data may be corrupted");
-}
-```
-
-### Supported URL Types
-
-```typescript
-// Basic URLs
-shortyQ.createShortUrl("https://example.com");
-
-// URLs with query parameters
-shortyQ.createShortUrl("https://api.example.com/search?q=test&sort=desc");
-
-// URLs with special characters
-shortyQ.createShortUrl(
-  "https://example.com/path/with/special/chars/!@#$%^&*()"
-);
-
-// URLs with Unicode characters
-shortyQ.createShortUrl("https://example.com/unicode/path/🚀/测试/тест");
-
-// URLs with fragments
-shortyQ.createShortUrl("https://example.com/page#section1");
-```
-
-### TypeScript Support
-
-```typescript
-import { ShortyQ, EncryptedData, ShortyQOptions } from "shortyq";
-
-// Type-safe options
-const options: ShortyQOptions = {
-  urlLength: 8,
-  saltRounds: 12,
-  quantumSeed: 42,
-};
-
-// Type-safe encrypted data
-interface URLRecord {
-  shortCode: string;
-  encryptedData: EncryptedData;
-  createdAt: Date;
-  expiresAt?: Date;
-}
-
-// Store URL data with proper typing
-const record: URLRecord = {
-  shortCode,
-  encryptedData,
-  createdAt: new Date(),
-  expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-};
-```
-
-## Security Features
-
-ShortyQ implements several layers of security:
-
-1. **Quantum-inspired noise generation**
-
-   - Uses seeded pseudo-random number generation
-   - Generates 32 bytes of quantum-inspired noise
-   - Applies trigonometric transformations for enhanced randomness
-   - Includes timestamp for unique encryption even with same seed
-
-2. **Multiple rounds of encryption**
-
-   - First layer: AES encryption using quantum noise as key
-   - Second layer: AES with PBKDF2-derived key
-   - Final layer: AES with SHA3-combined keys
-   - Each layer adds additional security
-
-3. **URL Security**
-
-   - Multiple layers of encryption for enhanced security
-   - Unique encryption for each URL (same URL gets different encrypted data)
-   - Collision detection and prevention
-   - Input validation and sanitization
-   - Maximum URL length limit (4096 characters)
-   - Secure key derivation and management
-
-4. **Storage Security**
-   - No built-in storage (use your preferred database)
-   - Encrypted data structure
-   - Optional expiration support
-   - Type-safe interfaces
-
-## Performance
-
-### Benchmark Results
-
-| Operation              | Average  | 95th Percentile | 99th Percentile |
-| ---------------------- | -------- | --------------- | --------------- |
-| Single URL Encryption  | 463.4ms  | 463.4ms         | 463.4ms         |
-| Complex URL Encryption | 441.34ms | 441.34ms        | 441.34ms        |
-| URL Decryption         | 457.13ms | 457.13ms        | 457.13ms        |
-| Concurrent Operations  | 45.62ms  | 45.62ms         | 45.62ms         |
-
-### Performance Characteristics
-
-- **Consistent Performance**: All operations show stable execution times with minimal variance
-- **Concurrent Optimization**: Parallel operations are ~10x faster than single operations
-- **Complex URL Handling**: Slightly faster than simple URLs due to optimized processing
-- **Memory Efficiency**: No persistent storage overhead
-- **Scalability**: Excellent concurrent operation support
-
-### Performance Optimization Tips
-
-1. **Batch Processing**
-
-   - Use concurrent operations for multiple URLs
-   - Process URLs in batches of 10-20 for optimal performance
-
-2. **Caching Strategy**
-
-   - Cache frequently accessed short codes
-   - Implement Redis or in-memory cache for hot paths
-
-3. **Database Optimization**
-
-   - Use indexed columns for short codes
-   - Implement connection pooling
-   - Consider read replicas for high-traffic scenarios
-
-4. **Resource Management**
-   - Monitor memory usage for large URL batches
-   - Implement rate limiting for API endpoints
-   - Use connection pooling for database operations
+- `quantumSeed` and `saltRounds` options are gone.
+- `EncryptedData` (`data`/`noise`/`iv`) is replaced by `EncryptedPayload`
+  (`kemCiphertext`/`nonce`/`ciphertext`).
+- `decryptUrl` moved from an instance method to a module-level function and
+  requires the secret key.
+- To keep old records: decrypt them with `shortyq@1` (possible from stored
+  data alone) and re-encrypt with v2.
 
 ## Contributing
 
