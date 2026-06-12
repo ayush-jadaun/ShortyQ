@@ -39,6 +39,13 @@ The demo showcases various features of ShortyQ:
    - URLs with Unicode characters
    - URLs with fragments
 
+5. **v2.1 Features**
+   - Encrypted expiry & metadata (`decryptPayload`)
+   - Password-protected links
+   - Key rotation with `keyId` and key arrays
+   - Deterministic & vanity short codes
+   - Batch shortening (`createShortUrls`)
+
 ## Database Integration Examples
 
 ### PostgreSQL with TypeORM
